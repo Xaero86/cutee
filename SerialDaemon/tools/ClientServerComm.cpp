@@ -2,6 +2,9 @@
 
 #include <sstream>
 
+/* Formatage d'un message avec le template:
+ * [<nom de l'emetteur>] <key>=[<valeur>] 
+ * Retourne la taille du message en octets */
 int createMessage(char* p_msg, int p_msgMaxSize, const char* p_source, std::map<std::string, std::string> &p_data)
 {
 	std::stringstream streamWrite;
@@ -16,6 +19,11 @@ int createMessage(char* p_msg, int p_msgMaxSize, const char* p_source, std::map<
 	return streamWrite.rdbuf()->sgetn(p_msg, p_msgMaxSize);
 }
 
+/* Deformatage d'un message a partir du template:
+ * [<nom de l'emetteur>] <key>=[<valeur>]
+ * Retourne: 
+ *  - false si le message est mal formate ou si le nom de l'emetteur ne correspond pas a l'attendu
+ *  - true sinon. Les cles/valeurs extraits du message sont ajoutes au parametre p_data */
 bool readMessage(char* p_msg, int p_msgSize, const char* p_expectSource, std::map<std::string, std::string> &p_data)
 {
 	std::string msgRead(p_msg, p_msgSize);

@@ -1,6 +1,7 @@
 #include "AClient.h"
 
 #include <unistd.h>
+#include <cstring>
 #include <signal.h>
 
 #include <sys/types.h>
@@ -13,6 +14,9 @@
 
 #include "ClientServerComm.h"
 
+/* Liste des versions de serveur incompatible, a completer en cas de rupture d'interface client/serveur */
+static const std::string G_IncompatibleServer[] = {  };
+
 AClient *AClient::G_ClientInstance = nullptr;
 
 void AClient::CreateAndConnecteClient(uint16_t p_port, int argc, char** argv)
@@ -23,6 +27,7 @@ void AClient::CreateAndConnecteClient(uint16_t p_port, int argc, char** argv)
 		G_ClientInstance = &client;
 		signal(SIGUSR1, UserSignalHandler);
 		client.eventLoop();
+		G_ClientInstance = nullptr;
 	}
 	else
 	{
@@ -32,17 +37,19 @@ void AClient::CreateAndConnecteClient(uint16_t p_port, int argc, char** argv)
 
 void AClient::UserSignalHandler(int p_signo)
 {
+	if (G_ClientInstance == nullptr)
+	{
+		exit(-1);
+	}
 	if (p_signo == SIGUSR1)
 	{
-		if (G_ClientInstance != nullptr)
-		{
-			G_ClientInstance->sendServerHalt();
-		}
+		G_ClientInstance->sendServerHalt();
 	}
 }
 
 AClient::AClient(uint16_t p_port, int argc, char** argv)
-	: _port(p_port), _clientSocketFD(-1), _argc(argc), _argv(argv)
+	: _port(p_port), _clientSocketFD(-1), _argc(argc), _argv(argv),
+	  _fifoInputPath(), _fifoInput(), _inputThreadId(-1)
 {
 }
 
@@ -51,6 +58,11 @@ AClient::~AClient()
 	if (_clientSocketFD != -1)
 	{
 		close(_clientSocketFD);
+		_clientSocketFD = -1;
+	}
+	if (_fifoInput.is_open())
+	{
+		_fifoInput.close();
 	}
 }
 
@@ -75,7 +87,7 @@ bool AClient::connectToServer()
 				(nbTryLeft > 0))
 			{
 				nbTryLeft--;
-				usleep(500000);
+				usleep(200000);
 			}
 		}
 	}
@@ -94,8 +106,21 @@ void AClient::eventLoop()
 	}
 	std::string senderVersion = msgData[KEY_VERSION];
 
-	/* TODO check version compatible */
-	std::cout << "Connected to server version " << senderVersion << std::endl;
+	/* Test si la version de serveur fait partie de la liste des versions incompatibles */
+	bool incompatible = false;
+	size_t nbIncompatible = sizeof(G_IncompatibleServer) / sizeof(std::string);
+	for (int i = 0; (i < sizeof(G_IncompatibleServer) / sizeof(std::string)) && !incompatible; i++)
+	{
+		if (senderVersion.compare(G_IncompatibleServer[i]) == 0)
+		{
+			incompatible = true;
+		}
+	}
+	if (incompatible)
+	{
+		std::cerr << "Unable to connect. Incompatible daemon already started" << std::endl;
+		return;
+	}
 
 	msgData.clear();
 
@@ -114,6 +139,21 @@ void AClient::eventLoop()
 
 	if (!sendMessage(msgData))
 	{
+		return;
+	}
+
+	msgData.clear();
+
+	/* Le serveur envoie au client la ressource pour communiquer les donnees venant de la connexion */
+	msgData[KEY_INPATH] = "";
+	if (!receiveMessage(&msgData))
+	{
+		return;
+	}
+	std::string fifoPath = msgData[KEY_INPATH];
+	if (!startInputLoop(fifoPath))
+	{
+		std::cerr << "Internal error" << std::endl;
 		return;
 	}
 
@@ -199,6 +239,7 @@ bool AClient::sendMessage(std::map<std::string, std::string> &p_data)
 	return (write(_clientSocketFD, msgBuffer, msgLength) >= 0);
 }
 
+/* Envoi d'un message d'arret au serveur, avec le nom du user en parametre si possible */
 void AClient::sendServerHalt()
 {
 	std::map<std::string, std::string> msgData;
@@ -214,5 +255,36 @@ void AClient::sendServerHalt()
 	}
 
 	sendMessage(msgData);
+}
+
+bool AClient::startInputLoop(std::string &p_fifoPath)
+{
+	_fifoInputPath = p_fifoPath;
+	return (0 == pthread_create(&_inputThreadId, nullptr, AClient::StaticInputLoop, this));
+}
+
+void* AClient::StaticInputLoop(void *p_client)
+{
+	((AClient*)p_client)->inputLoop();
+}
+
+void AClient::inputLoop()
+{
+	_fifoInput.open(_fifoInputPath.c_str());
+	if (_fifoInput.is_open())
+	{
+		std::string receiveData;
+		while(!_fifoInput.eof())
+		{
+			_fifoInput >> receiveData;
+			std::cout << receiveData;
+			std::cout.flush();
+		}
+		_fifoInput.close();
+	}
+	if (_clientSocketFD != -1)
+	{
+		shutdown(_clientSocketFD, SHUT_RDWR);
+	}
 }
 

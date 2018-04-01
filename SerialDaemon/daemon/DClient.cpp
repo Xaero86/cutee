@@ -1,15 +1,21 @@
 #include "DClient.h"
 
 #include <unistd.h>
+#include <cstring>
 #include <sstream>
 #include <sys/socket.h>
+#include <sys/stat.h>
 
 #include "DServer.h"
 #include "definition.h"
 #include "ClientServerComm.h"
 
+static const std::string G_IncompatibleClient[] = {  };
+
 DClient::DClient(int p_clientFD, DServer* p_server)
-	: _validity(false), _clientSocketFD(p_clientFD), _threadId(), _server(p_server)
+	: _validity(false), _clientSocketFD(p_clientFD), _threadId(), _server(p_server),
+	  _connexionParam(), _fifoInputPath(), _fifoInput(), _openInputThreadId(-1)
+
 {
 	int result = pthread_create(&_threadId, nullptr, DClient::StaticEventLoop, this);
 	if (result == 0)
@@ -18,13 +24,24 @@ DClient::DClient(int p_clientFD, DServer* p_server)
 	}
 	else
 	{
-		_server->logFile() << "DClient::DClient : Error creating thread" << std::endl;
+		_server->logFile() << "Internal error: fail to create client thread" << std::endl;
 	}
 }
 
 DClient::~DClient()
 {
-	close(_clientSocketFD);
+	if (_clientSocketFD != -1)
+	{
+		close(_clientSocketFD);
+	}
+	if (_fifoInput.is_open())
+	{
+		_fifoInput.close();
+	}
+	if (!_fifoInputPath.empty())
+	{
+		unlink(_fifoInputPath.c_str());
+	}
 }
 
 void* DClient::StaticEventLoop(void *p_client)
@@ -39,7 +56,7 @@ void DClient::eventLoop()
 	std::map<std::string, std::string> msgData;
 
 	/* Le serveur envoie sa version au client */
-	msgData["version"] = VERSION;
+	msgData[KEY_VERSION] = VERSION;
 	if (!sendMessage(msgData))
 	{
 		return;
@@ -56,10 +73,30 @@ void DClient::eventLoop()
 	}
 
 	std::string senderVersion = msgData[KEY_VERSION];
-	std::string requestParameters = msgData[KEY_PARAM];
+	_connexionParam = msgData[KEY_PARAM];
 
-	/* TODO check version compatible */
-	_server->logFile() << "Connection of client version " << senderVersion << " with parameters=" << requestParameters << std::endl;
+	/* Test si la version de client fait partie de la liste des versions incompatibles */
+	bool incompatible = false;
+	size_t nbIncompatible = sizeof(G_IncompatibleClient) / sizeof(std::string);
+	for (int i = 0; (i < sizeof(G_IncompatibleClient) / sizeof(std::string)) && !incompatible; i++)
+	{
+		if (senderVersion.compare(G_IncompatibleClient[i]) == 0)
+		{
+			incompatible = true;
+		}
+	}
+	if (incompatible)
+	{
+		std::string message("Unable to connect. Incompatible daemon already started");
+		sendFatal(message);
+	}
+	else
+	{
+		_server->logFile() << "Connection of client with parameters=" << _connexionParam << std::endl;
+
+		/* Creation de la connexion avec les parametres */
+		_server->connectClient(this);
+	}
 
 	/* boucle d'attente des messages du client */
 	while (receiveMessage());
@@ -155,5 +192,30 @@ bool DClient::sendFatal(std::string &p_msg)
 
 	p_data[KEY_FATAL] = p_msg;
 	return sendMessage(p_data);
+}
+
+bool DClient::setInputFifo(std::string &p_fifoPath)
+{
+	_fifoInputPath = p_fifoPath;
+
+	if (0 != pthread_create(&_openInputThreadId, nullptr, DClient::StaticOpenInputFifo, this))
+	{
+		return false;
+	}
+
+	std::map<std::string, std::string> msgData;
+	/* Le serveur envoie au client la ressource pour communiquer les donnees venant de la connexion */
+	msgData[KEY_INPATH] = _fifoInputPath;
+	return sendMessage(msgData);
+}
+
+void* DClient::StaticOpenInputFifo(void *p_client)
+{
+	((DClient*)p_client)->openInputFifo();
+}
+
+void DClient::openInputFifo()
+{
+	_fifoInput.open(_fifoInputPath.c_str());
 }
 

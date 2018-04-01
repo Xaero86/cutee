@@ -16,13 +16,15 @@
 
 #include <errno.h>
 
+#include "definition.h"
 #include "DClient.h"
+#include "DConnexion.h"
 
 void DServer::CreateAndStartDaemonServer(uint16_t p_port, int argc, char** argv)
 {
 	if (setsid() < 0)
 	{
-		std::cerr << "Failed to setsid" << std::endl;
+		std::cerr << "Unable to setsid" << std::endl;
 		exit(EXIT_FAILURE);
 	}
 
@@ -34,7 +36,7 @@ void DServer::CreateAndStartDaemonServer(uint16_t p_port, int argc, char** argv)
 
 	if (pid < 0)
 	{
-		std::cerr << "Failed to fork" << std::endl;
+		std::cerr << "Unable to fork" << std::endl;
 		exit(EXIT_FAILURE);
 	}
 	if (pid > 0)
@@ -43,13 +45,13 @@ void DServer::CreateAndStartDaemonServer(uint16_t p_port, int argc, char** argv)
 		return;
 	}
 
-	/* Set new file permissions */
+	/* Modification du umask */
 	umask(0);
 
-	/* Change the working directory to the root directory */
-	chdir("/");
+	/* Modification du repertoire de travail */
+	chdir(WORKING_DIRECTORY);
 
-	/* Close all open file descriptors */
+	/* Fermeture des io standard */
 	for (int x = sysconf(_SC_OPEN_MAX); x>=0; x--)
 	{
 		close(x);
@@ -70,30 +72,31 @@ void DServer::CreateAndStartDaemonServer(uint16_t p_port, int argc, char** argv)
 	DServer daemonServer(p_port);
 	if (daemonServer.startServer())
 	{
+		daemonServer.openLog();
 		daemonServer.eventLoop();
 	}
 }
 
 DServer::DServer(uint16_t p_port)
-	: _port(p_port), _serverSocketFD(-1)
+	: _port(p_port), _serverSocketFD(-1), _nbCreatedConnexions(0),
+	  _clientMutex(), _connexionMutex(), _logFile()
 {
-	_logFile.open("/tmp/serialDaemon.log", std::fstream::out | std::fstream::app);
-	if (!_logFile.is_open())
-	{
-		exit(-1);
-	}
 }
 
 DServer::~DServer()
 {
+	std::list<std::unique_ptr<DClient>>::iterator itClient = _clients.begin();
+	while(itClient != _clients.end())
+	{
+		itClient = _clients.erase(itClient);
+	}
+	std::list<std::unique_ptr<DConnexion>>::iterator itConnexion = _connexions.begin();
+	while(itConnexion != _connexions.end())
+	{
+		itConnexion = _connexions.erase(itConnexion);
+	}
 	if (_serverSocketFD != -1)
 	{
-		std::list<DClient*>::iterator it = _clients.begin();
-		while(it != _clients.end())
-		{
-			it = _clients.erase(it);
-		}
-
 		close(_serverSocketFD);
 	}
 	if (_logFile.is_open())
@@ -124,6 +127,20 @@ bool DServer::startServer()
 	return (_serverSocketFD != -1 && readyCheck == 0);
 }
 
+void DServer::openLog()
+{
+	std::stringstream streamLogFileName;
+	streamLogFileName << WORKING_DIRECTORY << "/" << SEVER_LOG_FILE;
+	std::string logFileName = streamLogFileName.str();
+	
+        _logFile.open(logFileName, std::fstream::out);
+	if (!_logFile.is_open())
+	{
+		/* Invalidation du fichier de log: on peut toujours ecrire dessus, mais sans effet */
+		_logFile.setstate(std::ios_base::badbit);
+	}
+}
+
 void DServer::eventLoop()
 {
 	struct sockaddr_in clientSocket;
@@ -142,7 +159,9 @@ void DServer::eventLoop()
 		DClient* newClient = new DClient(clientSocketFD, this);
 		if (newClient->isValid())
 		{
-			_clients.push_back(newClient);
+			_clientMutex.lock();
+			_clients.push_back(std::unique_ptr<DClient>(newClient));
+			_clientMutex.unlock();
 		}
 		else
 		{
@@ -151,26 +170,90 @@ void DServer::eventLoop()
 	}
 }
 
-void DServer::handleDisconnect()
+void DServer::connectClient(DClient *p_client)
 {
-	std::list<DClient*>::iterator it = _clients.begin();
-	while(it != _clients.end())
+	/* TODO gerer le cas d'une connexion deja ouverte mais avec des autres parametres */
+	bool clientAdded = false;
+	_connexionMutex.lock();
+	std::list<std::unique_ptr<DConnexion>>::iterator itConnexion = _connexions.begin();
+	while((itConnexion != _connexions.end()) && !clientAdded)
 	{
-		if ((*it)->isValid())
+		clientAdded = ((*itConnexion)->tryAddClient(p_client));
+	}
+	_connexionMutex.unlock();
+	if (!clientAdded)
+	{
+		DConnexion* newConnexion = new DConnexion(p_client, this, _nbCreatedConnexions++);
+		if (newConnexion->isValid())
 		{
-			it++;
+			_connexionMutex.lock();
+			_connexions.push_back(std::unique_ptr<DConnexion>(newConnexion));
+			_connexionMutex.unlock();
 		}
 		else
 		{
-			it = _clients.erase(it);
+			delete newConnexion;
+			std::string message("Fail to create another connexion");
+			p_client->sendFatal(message);
 		}
 	}
-	if (_clients.size() == 0)
+}
+
+void DServer::handleDisconnect()
+{
+	/* Parcours de la liste des connexions pour supprimer les clients invalides */
+	_connexionMutex.lock();
+	std::list<std::unique_ptr<DConnexion>>::iterator itConnexion = _connexions.begin();
+	while(itConnexion != _connexions.end())
+	{
+		if ((*itConnexion)->isValid())
+		{
+			(*itConnexion)->handleDisconnect();
+		}
+		itConnexion++;
+	}
+	_connexionMutex.unlock();
+	/* Parcours de la liste des clients pour supprimer ceux invalides */
+	_clientMutex.lock();
+	std::list<std::unique_ptr<DClient>>::iterator itClient = _clients.begin();
+	while(itClient != _clients.end())
+	{
+		if ((*itClient)->isValid())
+		{
+			itClient++;
+		}
+		else
+		{
+			itClient = _clients.erase(itClient);
+		}
+	}
+	_clientMutex.unlock();
+}
+
+void DServer::handleConnexionClosed()
+{
+	/* Parcours de la liste des connexions pour supprimer celles invalides */
+	_connexionMutex.lock();
+	std::list<std::unique_ptr<DConnexion>>::iterator itConnexion = _connexions.begin();
+	while(itConnexion != _connexions.end())
+	{
+		if ((*itConnexion)->isValid())
+		{
+			itConnexion++;
+		}
+		else
+		{
+			itConnexion = _connexions.erase(itConnexion);
+		}
+	}
+	if (_connexions.size() == 0)
 	{
 		shutdown(_serverSocketFD, SHUT_RDWR);
-		_logFile << "No more client. Stopping daemon" << std::endl;		
+		_logFile << "No more connexion. Stopping daemon" << std::endl;
 	}
+	_connexionMutex.unlock();
 }
+
 
 bool DServer::halt(std::string &p_cause)
 {
@@ -187,7 +270,8 @@ bool DServer::halt(std::string &p_cause)
 		message = streamMessage.str();
 	}
 
-	std::list<DClient*>::iterator it = _clients.begin();
+	_clientMutex.lock();
+	std::list<std::unique_ptr<DClient>>::iterator it = _clients.begin();
 	while(it != _clients.end())
 	{
 		if ((*it)->isValid())
@@ -196,5 +280,6 @@ bool DServer::halt(std::string &p_cause)
 		}
 		it++;
 	}
+	_clientMutex.unlock();
 }
 
