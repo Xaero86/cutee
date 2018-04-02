@@ -130,7 +130,7 @@ bool DServer::startServer()
 void DServer::openLog()
 {
 	std::stringstream streamLogFileName;
-	streamLogFileName << WORKING_DIRECTORY << "/" << SEVER_LOG_FILE;
+	streamLogFileName << WORKING_DIRECTORY << "/" << SERVER_LOG_FILE;
 	std::string logFileName = streamLogFileName.str();
 	
         _logFile.open(logFileName, std::fstream::out);
@@ -172,17 +172,28 @@ void DServer::eventLoop()
 
 void DServer::connectClient(DClient *p_client)
 {
-	/* TODO gerer le cas d'une connexion deja ouverte mais avec des autres parametres */
-	bool clientAdded = false;
+	/* Parcours des connexions existantes pour ajouter le client */
+	int clientAdded = 0;
 	_connexionMutex.lock();
 	std::list<std::unique_ptr<DConnexion>>::iterator itConnexion = _connexions.begin();
-	while((itConnexion != _connexions.end()) && !clientAdded)
+	while((itConnexion != _connexions.end()) && (clientAdded == 0))
 	{
 		clientAdded = ((*itConnexion)->tryAddClient(p_client));
+		itConnexion++;
 	}
 	_connexionMutex.unlock();
-	if (!clientAdded)
+	if (clientAdded == -1)
 	{
+		/* La connexion est deja ouvert vers la cible mais avec d'autres parametres */
+		std::stringstream streamMessage;
+		streamMessage << "Connexion to " << p_client->getLine() << " already opened with uncompatible parameters";
+		std::string message = streamMessage.str();
+		p_client->sendFatal(message);
+	}
+	else if (clientAdded == 0)
+	{
+		/* Le client n'a pas pu etre ajoute aux connexions existantes */
+		/* Creation d'une nouvelle connexion */
 		DConnexion* newConnexion = new DConnexion(p_client, this, _nbCreatedConnexions++);
 		if (newConnexion->isValid())
 		{

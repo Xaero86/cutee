@@ -4,7 +4,6 @@
 #include <pthread.h>
 #include <map>
 #include <string>
-#include <fstream>
 
 class DServer;
 
@@ -16,8 +15,10 @@ public :
 
 	bool isValid() {return _validity;}
 
-	std::string &getConnexionParam() {return _connexionParam;}
-	std::ofstream &fifoInput() {return _fifoInput;}
+	std::string &getLine() {return _line;}
+	std::string &getSpeed() {return _speed;}
+
+	void writeToInputFifo(const char* p_data, size_t p_size);
 
 	bool setInputFifo(std::string &p_fifoPath);
 
@@ -38,10 +39,11 @@ private :
         int            _clientSocketFD;
 	pthread_t      _threadId;
 	DServer*       _server;
-	std::string    _connexionParam;
+	std::string    _line;
+	std::string    _speed;
 
 	std::string    _fifoInputPath;
-	std::ofstream  _fifoInput;
+	int            _fifoInputFD;
 	pthread_t      _openInputThreadId;
 };
 

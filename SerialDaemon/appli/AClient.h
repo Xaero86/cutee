@@ -4,7 +4,6 @@
 #include <stdint.h>
 #include <string>
 #include <map>
-#include <fstream>
 #include <pthread.h>
 
 #include "definition.h"
@@ -21,7 +20,7 @@ public:
 	void sendServerHalt();
 
 private:
-	AClient(uint16_t p_port, int argc, char** argv);
+	AClient(uint16_t p_port, std::string &p_line, std::string &p_speed);
 	bool connectToServer();
 	void eventLoop();
 	bool receiveMessage(std::map<std::string, std::string> *p_dataExpected = nullptr);
@@ -32,12 +31,12 @@ private:
 	void inputLoop();
 
 	uint16_t            _port;
-	int                 _argc;
-	char**              _argv;
+	std::string         _line;
+	std::string         _speed;
 	int                 _clientSocketFD;
 
 	std::string         _fifoInputPath;
-	std::ifstream       _fifoInput;
+	int                 _fifoInputFD;
 	pthread_t           _inputThreadId;
 };
 

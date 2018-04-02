@@ -17,14 +17,15 @@ public:
 
 	bool isValid() {return _validity;}
 
-	bool tryAddClient(DClient *p_client);
+	int tryAddClient(DClient *p_client);
 	void handleDisconnect();
 
 private:
 	static void* StaticInputLoop(void *p_connexion);
 	void inputLoop();
 	void addClient(DClient *p_client);
-	void readParameters(std::string &p_parametersStr);
+	static int readSpeed(std::string &p_speed);
+
 	bool openConnexion();
 	void closeConnexion();
 	void sendConnectedMessage(DClient *p_client);
@@ -32,6 +33,7 @@ private:
 	unsigned int        _connexionId;
 	unsigned int        _nbCreatedFifo;
 	std::string         _line;
+	int                 _speed;
 	bool                _isDummy;
 	bool                _validity;
 	std::list<DClient*> _clientsList;
@@ -39,6 +41,9 @@ private:
 	DServer*            _server;
 	bool                _connected;
 	std::mutex          _clientMutex;
+	int                 _serialFileDesc;
+	/* utilises pour debloquer read lorsque la liaison n'ecrit rien */
+	int                 _internalPipeFDs[2];
 };
 
 #endif // D_CONNEXION_H

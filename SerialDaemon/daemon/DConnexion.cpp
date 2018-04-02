@@ -8,21 +8,27 @@
 #include <sstream>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <fcntl.h>
+#include <cstring>
 #include <errno.h>
+#include <termios.h>
 
 DConnexion::DConnexion(DClient* p_client, DServer* p_server, unsigned int p_connexionId)
-	: _connexionId(p_connexionId), _line(), _isDummy(false), _validity(false), _inputThreadId(), 
-	  _server(p_server), _nbCreatedFifo(0), _connected(false), _clientMutex()
+	: _connexionId(p_connexionId), _isDummy(false), _validity(false), _inputThreadId(), 
+	  _server(p_server), _nbCreatedFifo(0), _connected(false), _clientMutex(), _serialFileDesc(-1)
 {
-	std::string parameters = p_client->getConnexionParam();
-	if (parameters.empty())
+	_internalPipeFDs[0] = -1;
+	_internalPipeFDs[1] = -1;
+	_line = p_client->getLine();
+	std::string speed = p_client->getSpeed();
+	if (_line.empty())
 	{
 		_isDummy = true;
 		_line = "dummy connexion";
 	}
 	else
 	{
-		_line = parameters; /* TODO */
+		_speed = readSpeed(speed);
 	}
 
 	int result = pthread_create(&_inputThreadId, nullptr, DConnexion::StaticInputLoop, this);
@@ -48,10 +54,31 @@ DConnexion::~DConnexion()
 		it = _clientsList.erase(it);
 	}
 	_clientMutex.unlock();
+	closeConnexion();
 }
 
-void DConnexion::readParameters(std::string &p_parametersStr)
+int DConnexion::readSpeed(std::string &p_speed)
 {
+	if (p_speed.compare("230400") == 0)
+		return B230400;
+	else if (p_speed.compare("115200") == 0)
+		return B115200;
+	else if (p_speed.compare("57600") == 0)
+		return B57600;
+	else if (p_speed.compare("38400") == 0)
+		return B38400;
+	else if (p_speed.compare("19200") == 0)
+		return B19200;
+	else if (p_speed.compare("9600") == 0)
+		return B9600;
+	else if (p_speed.compare("4800") == 0)
+		return B4800;
+	else if (p_speed.compare("2400") == 0)
+		return B2400;
+	else if (p_speed.compare("1200") == 0)
+		return B1200;
+	else
+		return B115200; /* par defaut */
 }
 
 void* DConnexion::StaticInputLoop(void *p_connexion)
@@ -76,57 +103,99 @@ void DConnexion::inputLoop()
 	while(itClient != _clientsList.end())
 	{
 		sendConnectedMessage(*itClient);
+		itClient++;
 	}
 	_clientMutex.unlock();
 
+	char inputBuffer[INPUT_BUFFER];
+	int nbRead;
+	memset(inputBuffer, 0, INPUT_BUFFER);
+
+	/* Specific dummy */
 	int cycle = 0;
 	int dummyMsgSize = sizeof(DUMMY_CONNEC_MSG);
-	std::string dataInput;
+
+	/* pour connexion serie */
+	fd_set setOfFDs;
+	FD_ZERO(&setOfFDs);
+	FD_SET(_serialFileDesc, &setOfFDs);
+	FD_SET(_internalPipeFDs[0], &setOfFDs);
+	int fdmax = ((_serialFileDesc < _internalPipeFDs[0])?_internalPipeFDs[0]:_serialFileDesc)+1;
+
 	while (_validity)
 	{
 		if (_isDummy)
 		{
 			sleep(1);
-			dataInput = std::string(&DUMMY_CONNEC_MSG[cycle],1);
+			inputBuffer[0] = DUMMY_CONNEC_MSG[cycle];
+			nbRead = 1;
 			cycle = (cycle+1) % dummyMsgSize;
 		}
 		else
 		{
-			/* TODO read connec */
-			sleep(1);
-			dataInput = std::string(".");
+			select(fdmax, &setOfFDs, nullptr, nullptr, nullptr);
+			nbRead = read(_serialFileDesc, inputBuffer, INPUT_BUFFER-1);
+			if (FD_ISSET(_internalPipeFDs[0], &setOfFDs))
+			{
+				_validity = false;
+			}
+			/* supprimer les 8 lignes ?... */
+			if (nbRead > 0)
+			{
+				inputBuffer[nbRead] = '\0';
+			}
+			else if (nbRead < 0)
+			{
+				_validity = false;
+			}
 		}
-_server->logFile() << dataInput << std::endl;
-		_clientMutex.lock();
-		itClient = _clientsList.begin();
-		while(itClient != _clientsList.end())
+		if (nbRead > 0)
 		{
-			(*itClient)->fifoInput() << dataInput << std::endl;
-			//(*itClient)->fifoInput().flush();
-			itClient++;
+			_clientMutex.lock();
+			itClient = _clientsList.begin();
+			while(itClient != _clientsList.end())
+			{
+				(*itClient)->writeToInputFifo(inputBuffer, nbRead);
+				itClient++;
+			}
+			_clientMutex.unlock();
 		}
-		_clientMutex.unlock();
 	}
 	_connected = false;
 	closeConnexion();
+	std::string messageStr("Rupture");
+	_clientMutex.lock();
+	itClient = _clientsList.begin();
+	while(itClient != _clientsList.end())
+	{
+		(*itClient)->sendFatal(messageStr);
+		itClient++;
+	}
+	_clientMutex.unlock();	
 }
 
-bool DConnexion::tryAddClient(DClient *p_client)
+int DConnexion::tryAddClient(DClient *p_client)
 {
 	if (!_validity)
 	{
-		return false;
+		return 0;
 	}
-	std::string parameters = p_client->getConnexionParam();
-	if ((_isDummy && parameters.empty()) ||
-	    (_line.compare(parameters) == 0)) /* TODO */
+	std::string line = p_client->getLine();
+	int speed = readSpeed(p_client->getSpeed());
+
+	if ((_isDummy && line.empty()) ||
+	    ((_line.compare(line) == 0) && (_speed == speed)))
 	{
 		addClient(p_client);
-		return true;
+		return 1;
+	}
+	else if ((_line.compare(line) == 0) && (_speed != speed))
+	{
+		return -1;
 	}
 	else
 	{
-		return false;
+		return 0;
 	}
 }
 
@@ -175,9 +244,43 @@ bool DConnexion::openConnexion()
 	{
 		return true;
 	}
+//	_serialFileDesc = open(_line.c_str(), O_RDWR | O_NOCTTY | O_SYNC);
+	_serialFileDesc = open(_line.c_str(), O_RDWR | O_NOCTTY | O_NDELAY);
+	if (_serialFileDesc < 0)
+	{
+		return false;
+	}
+	struct termios ttyConf;
+	memset(&ttyConf, 0, sizeof ttyConf);
+	if (tcgetattr(_serialFileDesc, &ttyConf) != 0)
+	{
+		return false;
+	}
+	cfsetospeed(&ttyConf, (speed_t) _speed);
+	cfsetispeed(&ttyConf, (speed_t) _speed);
+
+	ttyConf.c_cflag |= (CLOCAL | CREAD);
+	ttyConf.c_cflag &= ~CSIZE;
+	ttyConf.c_cflag |= CS8;
+	ttyConf.c_cflag &= ~PARENB;
+	ttyConf.c_cflag &= ~CSTOPB;
+	ttyConf.c_cflag &= ~CRTSCTS;
+
+	ttyConf.c_iflag &= ~(IGNBRK | BRKINT | PARMRK | ISTRIP | INLCR | IGNCR | ICRNL | IXON);
+	ttyConf.c_lflag &= ~(ECHO | ECHONL | ICANON | ISIG | IEXTEN);
+	ttyConf.c_oflag &= ~OPOST;
+
+	ttyConf.c_cc[VMIN] = 1;
+	ttyConf.c_cc[VTIME] = 1;
+
+	if (tcsetattr(_serialFileDesc, TCSANOW, &ttyConf) != 0)
+	{
+		return false;
+	}
+
+	pipe2(_internalPipeFDs, O_NONBLOCK);
 	
-	/* TODO */
-	return false;
+	return true;
 }
 
 void DConnexion::closeConnexion()
@@ -186,7 +289,21 @@ void DConnexion::closeConnexion()
 	{
 		return;
 	}
-	/* TODO */
+	if (_serialFileDesc != -1)
+	{
+		close(_serialFileDesc);
+		_serialFileDesc = -1;
+	}
+	if (_internalPipeFDs[0] != -1)
+	{
+		close(_internalPipeFDs[0]);
+		_internalPipeFDs[0] = -1;
+	}
+	if (_internalPipeFDs[1] != -1)
+	{
+		close(_internalPipeFDs[1]);
+		_internalPipeFDs[1] = -1;
+	}
 }
 
 void DConnexion::handleDisconnect()
@@ -207,6 +324,20 @@ void DConnexion::handleDisconnect()
 	if (_clientsList.size() == 0)
 	{
 		_validity = false;
+		if (_internalPipeFDs[1] != -1)
+		{
+			/* Debloquer le thread de lecture */
+			char poke = '.';
+			write(_internalPipeFDs[1], &poke, 1);
+		}
+		if (_isDummy)
+		{
+			_server->logFile() << "No more client. Dummy connexion closed" << std::endl;
+		}
+		else
+		{
+			_server->logFile() << "No more client. Connexion " << _line << " closed" << std::endl;
+		}
 	}
 	_clientMutex.unlock();
 }

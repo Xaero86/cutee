@@ -5,6 +5,7 @@
 #include <sstream>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <fcntl.h>
 
 #include "DServer.h"
 #include "definition.h"
@@ -14,8 +15,7 @@ static const std::string G_IncompatibleClient[] = {  };
 
 DClient::DClient(int p_clientFD, DServer* p_server)
 	: _validity(false), _clientSocketFD(p_clientFD), _threadId(), _server(p_server),
-	  _connexionParam(), _fifoInputPath(), _fifoInput(), _openInputThreadId(-1)
-
+	  _line(), _speed(), _fifoInputPath(), _fifoInputFD(-1), _openInputThreadId(-1)
 {
 	int result = pthread_create(&_threadId, nullptr, DClient::StaticEventLoop, this);
 	if (result == 0)
@@ -34,9 +34,9 @@ DClient::~DClient()
 	{
 		close(_clientSocketFD);
 	}
-	if (_fifoInput.is_open())
+	if (_fifoInputFD != -1)
 	{
-		_fifoInput.close();
+		close(_fifoInputFD);
 	}
 	if (!_fifoInputPath.empty())
 	{
@@ -66,14 +66,16 @@ void DClient::eventLoop()
 
 	/* Le client envoie sa version au serveur avec les parametres */
 	msgData[KEY_VERSION] = "";
-	msgData[KEY_PARAM] = "";
+	msgData[KEY_LINE] = "";
+	msgData[KEY_SPEED] = "";
 	if (!receiveMessage(&msgData))
 	{
 		return;
 	}
 
 	std::string senderVersion = msgData[KEY_VERSION];
-	_connexionParam = msgData[KEY_PARAM];
+	_line = msgData[KEY_LINE];
+	_speed = msgData[KEY_SPEED];
 
 	/* Test si la version de client fait partie de la liste des versions incompatibles */
 	bool incompatible = false;
@@ -92,7 +94,7 @@ void DClient::eventLoop()
 	}
 	else
 	{
-		_server->logFile() << "Connection of client with parameters=" << _connexionParam << std::endl;
+		_server->logFile() << "Connection of client to line " << _line << std::endl;
 
 		/* Creation de la connexion avec les parametres */
 		_server->connectClient(this);
@@ -107,7 +109,7 @@ void DClient::eventLoop()
 bool DClient::receiveMessage(std::map<std::string, std::string> *p_dataExpected)
 {
 	ssize_t msgLength;
-	char msgBuffer[BUFFER_SIZE];
+	char msgBuffer[CLI_SER_BUFFER_SIZE];
 	std::map<std::string, std::string> msgData;
 
 	if (_clientSocketFD == -1)
@@ -115,9 +117,9 @@ bool DClient::receiveMessage(std::map<std::string, std::string> *p_dataExpected)
 		return false;
 	}
 
-	memset(msgBuffer, 0, BUFFER_SIZE);
-	msgLength = recv(_clientSocketFD, msgBuffer, BUFFER_SIZE, 0);
-	msgBuffer[BUFFER_SIZE-1] = '\0';
+	memset(msgBuffer, 0, CLI_SER_BUFFER_SIZE);
+	msgLength = recv(_clientSocketFD, msgBuffer, CLI_SER_BUFFER_SIZE, 0);
+	msgBuffer[CLI_SER_BUFFER_SIZE-1] = '\0';
 
 	if (msgLength <= 0)
 	{
@@ -159,14 +161,14 @@ bool DClient::receiveMessage(std::map<std::string, std::string> *p_dataExpected)
 bool DClient::sendMessage(std::map<std::string, std::string> &p_data)
 {
 	ssize_t msgLength;
-	char msgBuffer[BUFFER_SIZE];
+	char msgBuffer[CLI_SER_BUFFER_SIZE];
 
 	if (_clientSocketFD == -1)
 	{
 		return false;
 	}
 
-	msgLength = createMessage(msgBuffer, BUFFER_SIZE, SERVER_NAME, p_data);
+	msgLength = createMessage(msgBuffer, CLI_SER_BUFFER_SIZE, SERVER_NAME, p_data);
 	return (write(_clientSocketFD, msgBuffer, msgLength) >= 0);
 }
 
@@ -216,6 +218,22 @@ void* DClient::StaticOpenInputFifo(void *p_client)
 
 void DClient::openInputFifo()
 {
-	_fifoInput.open(_fifoInputPath.c_str());
+	_fifoInputFD = open(_fifoInputPath.c_str(), O_WRONLY);
+	if (_fifoInputFD < 0)
+	{
+		std::string message("Unable to open fifo");
+		sendFatal(message);
+	}
+}
+
+void DClient::writeToInputFifo(const char* p_data, size_t p_size)
+{
+	if (_fifoInputFD != -1)
+	{
+		if (write(_fifoInputFD, p_data, p_size) < 0)
+		{
+			_fifoInputFD = -1;
+		}
+	}
 }
 

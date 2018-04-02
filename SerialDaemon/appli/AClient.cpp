@@ -8,6 +8,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <pwd.h>
+#include <fcntl.h>
 
 #include <iostream>
 #include <sstream>
@@ -21,7 +22,24 @@ AClient *AClient::G_ClientInstance = nullptr;
 
 void AClient::CreateAndConnecteClient(uint16_t p_port, int argc, char** argv)
 {
-	AClient client(p_port, argc, argv);
+	int opt;
+	std::string line;
+	std::string speed;
+
+	while ((opt = getopt(argc, argv, "s:l:")) != -1)
+	{
+		switch (opt)
+		{
+			case 'l':
+				line = std::string(optarg);
+				break;
+			case 's':
+				speed = std::string(optarg);
+				break;
+		}
+	}
+
+	AClient client(p_port, line, speed);
 	if (client.connectToServer())
 	{
 		G_ClientInstance = &client;
@@ -47,9 +65,9 @@ void AClient::UserSignalHandler(int p_signo)
 	}
 }
 
-AClient::AClient(uint16_t p_port, int argc, char** argv)
-	: _port(p_port), _clientSocketFD(-1), _argc(argc), _argv(argv),
-	  _fifoInputPath(), _fifoInput(), _inputThreadId(-1)
+AClient::AClient(uint16_t p_port, std::string &p_line, std::string &p_speed)
+	: _port(p_port), _clientSocketFD(-1), _line(p_line), _speed(p_speed),
+	  _fifoInputPath(), _fifoInputFD(-1), _inputThreadId(-1)
 {
 }
 
@@ -60,9 +78,10 @@ AClient::~AClient()
 		close(_clientSocketFD);
 		_clientSocketFD = -1;
 	}
-	if (_fifoInput.is_open())
+	if (_fifoInputFD != -1)
 	{
-		_fifoInput.close();
+		close(_fifoInputFD);
+		_fifoInputFD = -1;
 	}
 }
 
@@ -126,16 +145,8 @@ void AClient::eventLoop()
 
 	/* Le client envoie sa version au serveur avec les parametres */
 	msgData[KEY_VERSION] = VERSION;
-	std::stringstream streamWrite;
-	for (int i=1; i<_argc; i++)
-	{
-		streamWrite << _argv[i];
-		if (i!=_argc-1)
-		{
-			streamWrite << " ";
-		}
-	}
-	msgData[KEY_PARAM] = streamWrite.str();
+	msgData[KEY_LINE] = _line;
+	msgData[KEY_SPEED] = _speed;
 
 	if (!sendMessage(msgData))
 	{
@@ -166,7 +177,7 @@ void AClient::eventLoop()
 bool AClient::receiveMessage(std::map<std::string, std::string> *p_dataExpected)
 {
 	ssize_t msgLength;
-	char msgBuffer[BUFFER_SIZE];
+	char msgBuffer[CLI_SER_BUFFER_SIZE];
 	std::map<std::string, std::string> msgData;
 
 	if (_clientSocketFD == -1)
@@ -174,9 +185,9 @@ bool AClient::receiveMessage(std::map<std::string, std::string> *p_dataExpected)
 		return false;
 	}
 
-	memset(msgBuffer, 0, BUFFER_SIZE);
-	msgLength = recv(_clientSocketFD, msgBuffer, BUFFER_SIZE, 0);
-	msgBuffer[BUFFER_SIZE-1] = '\0';
+	memset(msgBuffer, 0, CLI_SER_BUFFER_SIZE);
+	msgLength = recv(_clientSocketFD, msgBuffer, CLI_SER_BUFFER_SIZE, 0);
+	msgBuffer[CLI_SER_BUFFER_SIZE-1] = '\0';
 
 	if (msgLength <= 0)
 	{
@@ -228,14 +239,14 @@ bool AClient::receiveMessage(std::map<std::string, std::string> *p_dataExpected)
 bool AClient::sendMessage(std::map<std::string, std::string> &p_data)
 {
 	ssize_t msgLength;
-	char msgBuffer[BUFFER_SIZE];
+	char msgBuffer[CLI_SER_BUFFER_SIZE];
 
 	if (_clientSocketFD == -1)
 	{
 		return false;
 	}
 
-	msgLength = createMessage(msgBuffer, BUFFER_SIZE, CLIENT_NAME, p_data);
+	msgLength = createMessage(msgBuffer, CLI_SER_BUFFER_SIZE, CLIENT_NAME, p_data);
 	return (write(_clientSocketFD, msgBuffer, msgLength) >= 0);
 }
 
@@ -270,17 +281,32 @@ void* AClient::StaticInputLoop(void *p_client)
 
 void AClient::inputLoop()
 {
-	_fifoInput.open(_fifoInputPath.c_str());
-	if (_fifoInput.is_open())
+	_fifoInputFD = open(_fifoInputPath.c_str(), O_RDONLY);
+
+	if (_fifoInputFD != -1)
 	{
-		std::string receiveData;
-		while(!_fifoInput.eof())
+		char inputBuffer[INPUT_BUFFER];
+		unsigned int nbRead;
+		memset(inputBuffer, 0, INPUT_BUFFER);
+
+		while(true)
 		{
-			_fifoInput >> receiveData;
-			std::cout << receiveData;
+			nbRead = read(_fifoInputFD, inputBuffer, INPUT_BUFFER-1);
+			if (nbRead > 0)
+			{
+				std::cout.write(inputBuffer, nbRead);
+			}
+			else if (nbRead < 0)
+			{
+				break;
+			}
 			std::cout.flush();
 		}
-		_fifoInput.close();
+		if (_fifoInputFD != -1)
+		{
+			close(_fifoInputFD);
+			_fifoInputFD = -1;
+		}
 	}
 	if (_clientSocketFD != -1)
 	{
