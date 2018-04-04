@@ -12,10 +12,14 @@ class DClient;
 class DConnexion
 {
 public:
-	DConnexion(DClient *p_client, DServer *p_server, unsigned int p_connexionId);
+	DConnexion(DServer *p_server, std::string &p_line, std::string& p_speed);
 	virtual ~DConnexion();
 
-	bool isValid() {return _validity;}
+	bool isValid() {return _valid;}
+	bool isAlive() {return _alive;}
+
+	std::string &getLine() {return _line;}
+	int getNbClients() {return _clientsList.size();}
 
 	int tryAddClient(DClient *p_client);
 	void handleDisconnect();
@@ -23,25 +27,40 @@ public:
 private:
 	static void* StaticInputLoop(void *p_connexion);
 	void inputLoop();
+	static void* StaticOutputLoop(void *p_connexion);
+	void outputLoop();
+	static void* StaticCloseConnexion(void *p_connexion);
+	void closeConnexion();
+
 	void addClient(DClient *p_client);
 	static int readSpeed(std::string &p_speed);
 
 	bool openConnexion();
-	void closeConnexion();
-	void sendConnectedMessage(DClient *p_client);
 
+	DServer*            _server;
 	unsigned int        _connexionId;
-	unsigned int        _nbCreatedFifo;
+
 	std::string         _line;
 	int                 _speed;
 	bool                _isDummy;
-	bool                _validity;
+	bool                _dummyLoopback;
+	int                 _serialFD;
+
+	bool                _valid;
+	bool                _alive;
+
 	std::list<DClient*> _clientsList;
-	pthread_t           _inputThreadId;
-	DServer*            _server;
-	bool                _connected;
 	std::mutex          _clientMutex;
-	int                 _serialFileDesc;
+	unsigned int        _nbCreatedFifo;
+
+	pthread_t           _inputThreadId;
+
+	std::string         _outputFifoName;
+	int                 _outputFifoFD;
+	pthread_t           _outputThreadId;
+
+	pthread_t           _closeThreadId;
+
 	/* utilises pour debloquer read lorsque la liaison n'ecrit rien */
 	int                 _internalPipeFDs[2];
 };

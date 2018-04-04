@@ -11,7 +11,6 @@
 #include <fcntl.h>
 
 #include <iostream>
-#include <sstream>
 
 #include "ClientServerComm.h"
 
@@ -44,6 +43,7 @@ void AClient::CreateAndConnecteClient(uint16_t p_port, int argc, char** argv)
 	{
 		G_ClientInstance = &client;
 		signal(SIGUSR1, UserSignalHandler);
+		signal(SIGPIPE, SIG_IGN);
 		client.eventLoop();
 		G_ClientInstance = nullptr;
 	}
@@ -66,8 +66,9 @@ void AClient::UserSignalHandler(int p_signo)
 }
 
 AClient::AClient(uint16_t p_port, std::string &p_line, std::string &p_speed)
-	: _port(p_port), _clientSocketFD(-1), _line(p_line), _speed(p_speed),
-	  _fifoInputPath(), _fifoInputFD(-1), _inputThreadId(-1)
+	: _port(p_port), _line(p_line), _speed(p_speed), _clientSocketFD(-1),
+	  _fifoInputPath(), _fifoInputFD(-1), _inputThreadId(-1),
+	  _fifoOutputPath(), _fifoOutputFD(-1), _outputThreadId(-1)
 {
 }
 
@@ -82,6 +83,11 @@ AClient::~AClient()
 	{
 		close(_fifoInputFD);
 		_fifoInputFD = -1;
+	}
+	if (_fifoOutputFD != -1)
+	{
+		close(_fifoOutputFD);
+		_fifoOutputFD = -1;
 	}
 }
 
@@ -157,12 +163,19 @@ void AClient::eventLoop()
 
 	/* Le serveur envoie au client la ressource pour communiquer les donnees venant de la connexion */
 	msgData[KEY_INPATH] = "";
+	msgData[KEY_OUTPATH] = "";
 	if (!receiveMessage(&msgData))
 	{
 		return;
 	}
-	std::string fifoPath = msgData[KEY_INPATH];
-	if (!startInputLoop(fifoPath))
+	_fifoInputPath = msgData[KEY_INPATH];
+	if (0 != pthread_create(&_inputThreadId, nullptr, AClient::StaticInputLoop, this))
+	{
+		std::cerr << "Internal error" << std::endl;
+		return;
+	}
+	_fifoOutputPath = msgData[KEY_OUTPATH];
+	if (0 != pthread_create(&_outputThreadId, nullptr, AClient::StaticOutputLoop, this))
 	{
 		std::cerr << "Internal error" << std::endl;
 		return;
@@ -268,12 +281,6 @@ void AClient::sendServerHalt()
 	sendMessage(msgData);
 }
 
-bool AClient::startInputLoop(std::string &p_fifoPath)
-{
-	_fifoInputPath = p_fifoPath;
-	return (0 == pthread_create(&_inputThreadId, nullptr, AClient::StaticInputLoop, this));
-}
-
 void* AClient::StaticInputLoop(void *p_client)
 {
 	((AClient*)p_client)->inputLoop();
@@ -289,14 +296,14 @@ void AClient::inputLoop()
 		unsigned int nbRead;
 		memset(inputBuffer, 0, INPUT_BUFFER);
 
-		while(true)
+		while (true)
 		{
 			nbRead = read(_fifoInputFD, inputBuffer, INPUT_BUFFER-1);
 			if (nbRead > 0)
 			{
 				std::cout.write(inputBuffer, nbRead);
 			}
-			else if (nbRead < 0)
+			else
 			{
 				break;
 			}
@@ -306,6 +313,47 @@ void AClient::inputLoop()
 		{
 			close(_fifoInputFD);
 			_fifoInputFD = -1;
+		}
+	}
+	if (_clientSocketFD != -1)
+	{
+		shutdown(_clientSocketFD, SHUT_RDWR);
+	}
+}
+
+void* AClient::StaticOutputLoop(void *p_client)
+{
+	((AClient*)p_client)->outputLoop();
+}
+
+void AClient::outputLoop()
+{
+	_fifoOutputFD = open(_fifoOutputPath.c_str(), O_WRONLY);
+
+	if (_fifoOutputFD != -1)
+	{
+		char outputBuffer[INPUT_BUFFER];
+		unsigned int nbRead;
+		memset(outputBuffer, 0, INPUT_BUFFER);
+
+		while (true)
+		{
+			char* result = fgets(outputBuffer, INPUT_BUFFER-1, stdin);
+			nbRead = strlen(outputBuffer);
+			
+			if (result && (nbRead > 0))
+			{
+				write(_fifoOutputFD, outputBuffer, nbRead);
+			}
+			else
+			{
+				break;
+			}
+		}
+		if (_fifoOutputFD != -1)
+		{
+			close(_fifoOutputFD);
+			_fifoOutputFD = -1;
 		}
 	}
 	if (_clientSocketFD != -1)

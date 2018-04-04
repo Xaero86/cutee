@@ -20,7 +20,7 @@ public :
 
 	void writeToInputFifo(const char* p_data, size_t p_size);
 
-	bool setInputFifo(std::string &p_fifoPath);
+	bool setFifos(std::string &p_fifoInputPath, std::string &p_fifoOutputPath);
 
 	bool sendInfo(std::string &p_msg);
 	bool sendError(std::string &p_msg);

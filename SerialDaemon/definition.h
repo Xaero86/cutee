@@ -27,6 +27,5 @@
 
 /* Element pour le serveur */
 #define INPUT_BUFFER 1024
-#define DUMMY_CONNEC_MSG "Connected to dummy connexion..."
 
 #endif // DEFINITION_H

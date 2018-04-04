@@ -196,9 +196,9 @@ bool DClient::sendFatal(std::string &p_msg)
 	return sendMessage(p_data);
 }
 
-bool DClient::setInputFifo(std::string &p_fifoPath)
+bool DClient::setFifos(std::string &p_fifoInputPath, std::string &p_fifoOutputPath)
 {
-	_fifoInputPath = p_fifoPath;
+	_fifoInputPath = p_fifoInputPath;
 
 	if (0 != pthread_create(&_openInputThreadId, nullptr, DClient::StaticOpenInputFifo, this))
 	{
@@ -208,6 +208,7 @@ bool DClient::setInputFifo(std::string &p_fifoPath)
 	std::map<std::string, std::string> msgData;
 	/* Le serveur envoie au client la ressource pour communiquer les donnees venant de la connexion */
 	msgData[KEY_INPATH] = _fifoInputPath;
+	msgData[KEY_OUTPATH] = p_fifoOutputPath;
 	return sendMessage(msgData);
 }
 
@@ -219,7 +220,7 @@ void* DClient::StaticOpenInputFifo(void *p_client)
 void DClient::openInputFifo()
 {
 	_fifoInputFD = open(_fifoInputPath.c_str(), O_WRONLY);
-	if (_fifoInputFD < 0)
+	if (_fifoInputFD == -1)
 	{
 		std::string message("Unable to open fifo");
 		sendFatal(message);

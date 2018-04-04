@@ -45,6 +45,8 @@ void DServer::CreateAndStartDaemonServer(uint16_t p_port, int argc, char** argv)
 		return;
 	}
 
+	signal(SIGPIPE, SIG_IGN);
+
 	/* Modification du umask */
 	umask(0);
 
@@ -78,7 +80,7 @@ void DServer::CreateAndStartDaemonServer(uint16_t p_port, int argc, char** argv)
 }
 
 DServer::DServer(uint16_t p_port)
-	: _port(p_port), _serverSocketFD(-1), _nbCreatedConnexions(0),
+	: _port(p_port), _serverSocketFD(-1),
 	  _clientMutex(), _connexionMutex(), _logFile()
 {
 }
@@ -107,24 +109,20 @@ DServer::~DServer()
 
 bool DServer::startServer()
 {
-	int readyCheck = -1;
+	_serverSocketFD = socket(AF_INET, SOCK_STREAM, 0);
 	if (_serverSocketFD == -1)
 	{
-		_serverSocketFD = socket(AF_INET, SOCK_STREAM, 0);
-		if (_serverSocketFD < 0)
-		{
-			_logFile << "Unable to create server socket" << std::endl;
-		}
-		else
-		{
-			struct sockaddr_in socketProp;
-			socketProp.sin_family = AF_INET;
-			socketProp.sin_port = htons(_port);
-			socketProp.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-			readyCheck = bind(_serverSocketFD, (struct sockaddr *) &socketProp, sizeof(socketProp));
-		}
+		_logFile << "Unable to create server socket" << std::endl;
+		return false;
 	}
-	return (_serverSocketFD != -1 && readyCheck == 0);
+	else
+	{
+		struct sockaddr_in socketProp;
+		socketProp.sin_family = AF_INET;
+		socketProp.sin_port = htons(_port);
+		socketProp.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+		return (0 == bind(_serverSocketFD, (struct sockaddr *) &socketProp, sizeof(socketProp)));
+	}
 }
 
 void DServer::openLog()
@@ -147,7 +145,7 @@ void DServer::eventLoop()
 	int socketStructSize = sizeof(struct sockaddr_in);
 	int clientSocketFD;
 
-	if (_serverSocketFD < 0)
+	if (_serverSocketFD == -1)
 	{
 		return;
 	}
@@ -184,7 +182,7 @@ void DServer::connectClient(DClient *p_client)
 	_connexionMutex.unlock();
 	if (clientAdded == -1)
 	{
-		/* La connexion est deja ouvert vers la cible mais avec d'autres parametres */
+		/* La connexion est deja ouverte vers la cible mais avec d'autres parametres */
 		std::stringstream streamMessage;
 		streamMessage << "Connexion to " << p_client->getLine() << " already opened with uncompatible parameters";
 		std::string message = streamMessage.str();
@@ -194,12 +192,13 @@ void DServer::connectClient(DClient *p_client)
 	{
 		/* Le client n'a pas pu etre ajoute aux connexions existantes */
 		/* Creation d'une nouvelle connexion */
-		DConnexion* newConnexion = new DConnexion(p_client, this, _nbCreatedConnexions++);
+		DConnexion* newConnexion = new DConnexion(this, p_client->getLine(), p_client->getSpeed());
 		if (newConnexion->isValid())
 		{
 			_connexionMutex.lock();
 			_connexions.push_back(std::unique_ptr<DConnexion>(newConnexion));
 			_connexionMutex.unlock();
+			newConnexion->tryAddClient(p_client);
 		}
 		else
 		{
@@ -217,10 +216,7 @@ void DServer::handleDisconnect()
 	std::list<std::unique_ptr<DConnexion>>::iterator itConnexion = _connexions.begin();
 	while(itConnexion != _connexions.end())
 	{
-		if ((*itConnexion)->isValid())
-		{
-			(*itConnexion)->handleDisconnect();
-		}
+		(*itConnexion)->handleDisconnect();
 		itConnexion++;
 	}
 	_connexionMutex.unlock();
@@ -248,7 +244,7 @@ void DServer::handleConnexionClosed()
 	std::list<std::unique_ptr<DConnexion>>::iterator itConnexion = _connexions.begin();
 	while(itConnexion != _connexions.end())
 	{
-		if ((*itConnexion)->isValid())
+		if ((*itConnexion)->isAlive())
 		{
 			itConnexion++;
 		}
@@ -259,12 +255,11 @@ void DServer::handleConnexionClosed()
 	}
 	if (_connexions.size() == 0)
 	{
-		shutdown(_serverSocketFD, SHUT_RDWR);
 		_logFile << "No more connexion. Stopping daemon" << std::endl;
+		shutdown(_serverSocketFD, SHUT_RDWR);
 	}
 	_connexionMutex.unlock();
 }
-
 
 bool DServer::halt(std::string &p_cause)
 {
@@ -292,5 +287,35 @@ bool DServer::halt(std::string &p_cause)
 		it++;
 	}
 	_clientMutex.unlock();
+}
+
+std::string DServer::getStatus()
+{
+	std::stringstream streamStatus;
+	int nbClientsConnected = 0;
+
+	streamStatus << "Serial daemon: " << _connexions.size() << " connexion(s) opened" << std::endl;
+
+	_connexionMutex.lock();
+	std::list<std::unique_ptr<DConnexion>>::iterator itConnexion = _connexions.begin();
+	while(itConnexion != _connexions.end())
+	{
+		streamStatus << " - " << (*itConnexion)->getLine() << ": ";
+		if ((*itConnexion)->isValid())
+		{
+			streamStatus << (*itConnexion)->getNbClients() << " client(s)" << std::endl;
+			nbClientsConnected += (*itConnexion)->getNbClients();
+		}
+		else
+		{
+			streamStatus << " closing..." << std::endl;
+		}
+		itConnexion++;
+	}
+        _connexionMutex.unlock();
+
+	streamStatus << "Total client(s): " << nbClientsConnected << " connected / " << _clients.size() << std::endl;
+
+	return streamStatus.str();
 }
 

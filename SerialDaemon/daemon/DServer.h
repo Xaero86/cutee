@@ -25,6 +25,7 @@ public :
 	bool halt(std::string &p_cause);
 
 	std::ofstream &logFile() {return _logFile;}
+	std::string getStatus();
 
 private :
 	DServer(uint16_t p_port);
@@ -36,7 +37,6 @@ private :
 	int                                     _serverSocketFD;
 	std::list<std::unique_ptr<DClient>>     _clients;
 	std::list<std::unique_ptr<DConnexion>>  _connexions;
-	unsigned int                            _nbCreatedConnexions;
 	std::mutex                              _clientMutex;
 	std::mutex                              _connexionMutex;
 

@@ -30,6 +30,9 @@ private:
 	static void* StaticInputLoop(void *p_client);
 	void inputLoop();
 
+	static void* StaticOutputLoop(void *p_client);
+	void outputLoop();
+
 	uint16_t            _port;
 	std::string         _line;
 	std::string         _speed;
@@ -38,6 +41,10 @@ private:
 	std::string         _fifoInputPath;
 	int                 _fifoInputFD;
 	pthread_t           _inputThreadId;
+
+	std::string         _fifoOutputPath;
+	int                 _fifoOutputFD;
+	pthread_t           _outputThreadId;
 };
 
 #endif // A_CLIENT_H
