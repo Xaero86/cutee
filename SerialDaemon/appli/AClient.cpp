@@ -19,26 +19,9 @@ static const std::string G_IncompatibleServer[] = {  };
 
 AClient *AClient::G_ClientInstance = nullptr;
 
-void AClient::CreateAndConnecteClient(uint16_t p_port, int argc, char** argv)
+void AClient::CreateAndConnecteClient(uint16_t p_port, std::string p_line, std::string p_speed, bool p_monitoring)
 {
-	int opt;
-	std::string line;
-	std::string speed;
-
-	while ((opt = getopt(argc, argv, "s:l:")) != -1)
-	{
-		switch (opt)
-		{
-			case 'l':
-				line = std::string(optarg);
-				break;
-			case 's':
-				speed = std::string(optarg);
-				break;
-		}
-	}
-
-	AClient client(p_port, line, speed);
+	AClient client(p_port, p_line, p_speed, p_monitoring);
 	if (client.connectToServer())
 	{
 		G_ClientInstance = &client;
@@ -65,8 +48,8 @@ void AClient::UserSignalHandler(int p_signo)
 	}
 }
 
-AClient::AClient(uint16_t p_port, std::string &p_line, std::string &p_speed)
-	: _port(p_port), _line(p_line), _speed(p_speed), _clientSocketFD(-1),
+AClient::AClient(uint16_t p_port, std::string &p_line, std::string &p_speed, bool p_monitoring)
+	: _port(p_port), _line(p_line), _speed(p_speed), _monitoring(p_monitoring), _clientSocketFD(-1),
 	  _fifoInputPath(), _fifoInputFD(-1), _inputThreadId(-1),
 	  _fifoOutputPath(), _fifoOutputFD(-1), _outputThreadId(-1)
 {
@@ -151,8 +134,15 @@ void AClient::eventLoop()
 
 	/* Le client envoie sa version au serveur avec les parametres */
 	msgData[KEY_VERSION] = VERSION;
-	msgData[KEY_LINE] = _line;
-	msgData[KEY_SPEED] = _speed;
+	if (!_monitoring)
+	{
+		msgData[KEY_LINE] = _line;
+		msgData[KEY_SPEED] = _speed;
+	}
+	else
+	{
+		msgData[KEY_MONITOR] = "YES";
+	}
 
 	if (!sendMessage(msgData))
 	{

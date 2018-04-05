@@ -15,7 +15,7 @@ static const std::string G_IncompatibleClient[] = {  };
 
 DClient::DClient(int p_clientFD, DServer* p_server)
 	: _validity(false), _clientSocketFD(p_clientFD), _threadId(), _server(p_server),
-	  _line(), _speed(), _fifoInputPath(), _fifoInputFD(-1), _openInputThreadId(-1)
+	  _line(), _speed(), _monitoring(false), _fifoInputPath(), _fifoInputFD(-1), _openInputThreadId(-1)
 {
 	int result = pthread_create(&_threadId, nullptr, DClient::StaticEventLoop, this);
 	if (result == 0)
@@ -68,14 +68,22 @@ void DClient::eventLoop()
 	msgData[KEY_VERSION] = "";
 	msgData[KEY_LINE] = "";
 	msgData[KEY_SPEED] = "";
+	msgData[KEY_MONITOR] = "";
 	if (!receiveMessage(&msgData))
 	{
 		return;
 	}
 
 	std::string senderVersion = msgData[KEY_VERSION];
-	_line = msgData[KEY_LINE];
-	_speed = msgData[KEY_SPEED];
+	if (msgData[KEY_MONITOR].empty())
+	{
+		_line = msgData[KEY_LINE];
+		_speed = msgData[KEY_SPEED];
+	}
+	else
+	{
+		_monitoring = true;
+	}
 
 	/* Test si la version de client fait partie de la liste des versions incompatibles */
 	bool incompatible = false;

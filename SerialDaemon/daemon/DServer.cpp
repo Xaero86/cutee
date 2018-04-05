@@ -184,7 +184,15 @@ void DServer::connectClient(DClient *p_client)
 	{
 		/* La connexion est deja ouverte vers la cible mais avec d'autres parametres */
 		std::stringstream streamMessage;
-		streamMessage << "Connexion to " << p_client->getLine() << " already opened with uncompatible parameters";
+		streamMessage << "Connection to " << p_client->getLine() << " already opened with uncompatible parameters";
+		std::string message = streamMessage.str();
+		p_client->sendFatal(message);
+	}
+	else if (clientAdded == -2)
+	{
+		/* La ressource n'existe pas, ou les droits sont pas suffisants */
+		std::stringstream streamMessage;
+		streamMessage << "Unable to connect to " << p_client->getLine();
 		std::string message = streamMessage.str();
 		p_client->sendFatal(message);
 	}
@@ -192,7 +200,15 @@ void DServer::connectClient(DClient *p_client)
 	{
 		/* Le client n'a pas pu etre ajoute aux connexions existantes */
 		/* Creation d'une nouvelle connexion */
-		DConnexion* newConnexion = new DConnexion(this, p_client->getLine(), p_client->getSpeed());
+		DConnexion* newConnexion;
+		if (p_client->isMonitoring())
+		{
+			newConnexion = new DConnexion(this);
+		}
+		else
+		{
+			newConnexion = new DConnexion(this, p_client->getLine(), p_client->getSpeed());
+		}
 		if (newConnexion->isValid())
 		{
 			_connexionMutex.lock();

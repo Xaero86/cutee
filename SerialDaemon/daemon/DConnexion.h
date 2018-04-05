@@ -13,6 +13,7 @@ class DConnexion
 {
 public:
 	DConnexion(DServer *p_server, std::string &p_line, std::string& p_speed);
+	DConnexion(DServer *p_server);
 	virtual ~DConnexion();
 
 	bool isValid() {return _valid;}
@@ -25,25 +26,24 @@ public:
 	void handleDisconnect();
 
 private:
-	static void* StaticInputLoop(void *p_connexion);
+	static int readSpeed(std::string &p_speed);
+
+	static void* StaticCommLoop(void *p_connexion);
 	void inputLoop();
-	static void* StaticOutputLoop(void *p_connexion);
-	void outputLoop();
+	void monitoringLoop();
 	static void* StaticCloseConnexion(void *p_connexion);
 	void closeConnexion();
 
 	void addClient(DClient *p_client);
-	static int readSpeed(std::string &p_speed);
-
 	bool openConnexion();
 
 	DServer*            _server;
-	unsigned int        _connexionId;
 
 	std::string         _line;
 	int                 _speed;
-	bool                _isDummy;
-	bool                _dummyLoopback;
+	bool                _isMonitoring;
+	bool                _monitoringLoopback;
+
 	int                 _serialFD;
 
 	bool                _valid;
@@ -51,13 +51,11 @@ private:
 
 	std::list<DClient*> _clientsList;
 	std::mutex          _clientMutex;
-	unsigned int        _nbCreatedFifo;
 
-	pthread_t           _inputThreadId;
+	std::string         _monitoringFifoName;
+	int                 _monitoringFifoFD;
 
-	std::string         _outputFifoName;
-	int                 _outputFifoFD;
-	pthread_t           _outputThreadId;
+	pthread_t           _commThreadId;
 
 	pthread_t           _closeThreadId;
 

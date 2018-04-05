@@ -17,6 +17,7 @@ public :
 
 	std::string &getLine() {return _line;}
 	std::string &getSpeed() {return _speed;}
+	bool isMonitoring() {return _monitoring;}
 
 	void writeToInputFifo(const char* p_data, size_t p_size);
 
@@ -41,6 +42,7 @@ private :
 	DServer*       _server;
 	std::string    _line;
 	std::string    _speed;
+	bool           _monitoring;
 
 	std::string    _fifoInputPath;
 	int            _fifoInputFD;

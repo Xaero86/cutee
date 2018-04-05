@@ -11,7 +11,7 @@
 class AClient
 {
 public:
-	static void CreateAndConnecteClient(uint16_t p_port, int argc, char** argv);
+	static void CreateAndConnecteClient(uint16_t p_port, std::string p_line, std::string p_speed, bool p_monitoring);
 	static void UserSignalHandler(int p_signo);
 	static AClient *G_ClientInstance;
 
@@ -20,7 +20,7 @@ public:
 	void sendServerHalt();
 
 private:
-	AClient(uint16_t p_port, std::string &p_line, std::string &p_speed);
+	AClient(uint16_t p_port, std::string &p_line, std::string &p_speed, bool p_monitoring);
 	bool connectToServer();
 	void eventLoop();
 	bool receiveMessage(std::map<std::string, std::string> *p_dataExpected = nullptr);
@@ -36,6 +36,7 @@ private:
 	uint16_t            _port;
 	std::string         _line;
 	std::string         _speed;
+	bool                _monitoring;
 	int                 _clientSocketFD;
 
 	std::string         _fifoInputPath;

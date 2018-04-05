@@ -14,6 +14,7 @@
 #define KEY_VERSION "version"
 #define KEY_LINE    "line"
 #define KEY_SPEED   "speed"
+#define KEY_MONITOR "monitoring"
 #define KEY_OUTPATH "outputPath"
 #define KEY_INPATH  "inputPath"
 #define KEY_INFO    "info"
