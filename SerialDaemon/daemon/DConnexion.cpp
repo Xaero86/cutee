@@ -180,6 +180,7 @@ void DConnexion::inputLoop()
 		}
 		if (nbRead > 0)
 		{
+_server->logFile() << "nbRead: " << nbRead << std::endl;
 			_clientMutex.lock();
 			itClient = _clientsList.begin();
 			while(itClient != _clientsList.end())
@@ -223,26 +224,28 @@ void DConnexion::monitoringLoop()
 		nbRead = read(_monitoringFifoFD, monitoringBuffer, INPUT_BUFFER-1);
 		if (nbRead > 0)
 		{
-			/* TODO changer 2 en 1 ... */
 			std::string response;
 			if (_monitoringLoopback)
 			{
-				response = std::string(monitoringBuffer, nbRead);
+				if ((nbRead == 1) && (monitoringBuffer[0] == 0x03))
+				{
+					/* Ctrl+c => break => 0x03 */
+					_monitoringLoopback = false;
+					response = "Loopback stopped.\n";
+				}
+				else
+				{
+					response = std::string(monitoringBuffer, nbRead);
+				}
 			}
-			else if ((nbRead == 2) && (monitoringBuffer[0] == 's'))
+			else if ((nbRead == 1) && (monitoringBuffer[0] == 's'))
 			{
 				response = _server->getStatus();
 			}
-			else if ((nbRead == 2) && (monitoringBuffer[0] == 'l'))
+			else if ((nbRead == 1) && (monitoringBuffer[0] == 'l'))
 			{
 				_monitoringLoopback = true;
 				response = "Loopback activated. Ctrl+C to stop\n";
-			}
-			else if ((nbRead == 2) && (monitoringBuffer[0] == 0x03))
-			{
-				/* Ctrl+c => break => 0x03 */
-				_monitoringLoopback = false;
-				response = "Loopback stopped.\n";
 			}
 			if (response.length() > 0)
 			{
@@ -373,7 +376,6 @@ bool DConnexion::openConnexion()
 	{
 		return true;
 	}
-//	_serialFD = open(_line.c_str(), O_RDWR | O_NOCTTY | O_SYNC);
 	_serialFD = open(_line.c_str(), O_RDWR | O_NOCTTY | O_NDELAY);
 	if (_serialFD < 0)
 	{
@@ -473,7 +475,22 @@ void DConnexion::closeConnexion()
 		pthread_cancel(_commThreadId);
 		_server->logFile() << "Warning: Force close communication thread of " << _line << std::endl;
 	}
-	_alive = false;
 	_server->logFile() << "No more client. Connexion to " << _line << " closed" << std::endl;	
+	_alive = false;
 }
 
+std::string DConnexion::getStatus()
+{
+	std::stringstream streamStatus;
+
+	streamStatus << _line << ": ";
+	if (_valid)
+	{
+		streamStatus << _clientsList.size() << " client(s)" << std::endl;
+	}
+	else
+	{
+		streamStatus << " closing..." << std::endl;
+	}
+	return streamStatus.str();
+}

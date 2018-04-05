@@ -25,6 +25,8 @@ public:
 	int tryAddClient(DClient *p_client);
 	void handleDisconnect();
 
+	std::string getStatus();
+
 private:
 	static int readSpeed(std::string &p_speed);
 

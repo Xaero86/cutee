@@ -12,8 +12,10 @@ class AClient
 {
 public:
 	static void CreateAndConnecteClient(uint16_t p_port, std::string p_line, std::string p_speed, bool p_monitoring);
-	static void UserSignalHandler(int p_signo);
+	static void SignalHandler(int p_signo);
+	static void reinitTerm();
 	static AClient *G_ClientInstance;
+	static struct termios G_NormalTerm;
 
 	virtual ~AClient();
 

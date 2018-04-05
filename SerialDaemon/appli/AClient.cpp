@@ -11,6 +11,7 @@
 #include <fcntl.h>
 
 #include <iostream>
+#include <termios.h>
 
 #include "ClientServerComm.h"
 
@@ -18,25 +19,39 @@
 static const std::string G_IncompatibleServer[] = {  };
 
 AClient *AClient::G_ClientInstance = nullptr;
+struct termios AClient::G_NormalTerm;
 
 void AClient::CreateAndConnecteClient(uint16_t p_port, std::string p_line, std::string p_speed, bool p_monitoring)
 {
 	AClient client(p_port, p_line, p_speed, p_monitoring);
 	if (client.connectToServer())
 	{
+		struct termios newTerm;
+
+		/* Gestion des signaux */
 		G_ClientInstance = &client;
-		signal(SIGUSR1, UserSignalHandler);
+		signal(SIGUSR1, SignalHandler);
+		signal(SIGINT,  SignalHandler);
 		signal(SIGPIPE, SIG_IGN);
+
+		/* Gestion du terminal: stdin */
+		atexit(reinitTerm);
+		/* Empeche echo des caracteres entres */
+		tcgetattr(STDIN_FILENO, &G_NormalTerm);
+		newTerm = G_NormalTerm;
+		newTerm.c_lflag &= ~(ICANON | ECHO);
+		tcsetattr(STDIN_FILENO, TCSANOW, &newTerm);
+
 		client.eventLoop();
 		G_ClientInstance = nullptr;
 	}
 	else
 	{
-		std::cerr << "Fail to connect" << std::endl;
+		std::cerr << "Internal error: cannot connect to server" << std::endl;
 	}
 }
 
-void AClient::UserSignalHandler(int p_signo)
+void AClient::SignalHandler(int p_signo)
 {
 	if (G_ClientInstance == nullptr)
 	{
@@ -46,6 +61,23 @@ void AClient::UserSignalHandler(int p_signo)
 	{
 		G_ClientInstance->sendServerHalt();
 	}
+	if (p_signo == SIGINT)
+	{
+		if (G_ClientInstance->_fifoOutputFD != -1)
+		{
+			char ch = 0x03;
+			write(G_ClientInstance->_fifoOutputFD, &ch, 1);
+		}
+		else
+		{
+			exit(-1);
+		}
+	}
+}
+
+void AClient::reinitTerm()
+{
+	tcsetattr(STDIN_FILENO, TCSANOW, &G_NormalTerm);
 }
 
 AClient::AClient(uint16_t p_port, std::string &p_line, std::string &p_speed, bool p_monitoring)
@@ -322,22 +354,32 @@ void AClient::outputLoop()
 
 	if (_fifoOutputFD != -1)
 	{
-		char outputBuffer[INPUT_BUFFER];
-		unsigned int nbRead;
-		memset(outputBuffer, 0, INPUT_BUFFER);
-
-		while (true)
+		char ch;
+		bool escaping = false;
+		bool stop = false;
+		while (!stop)
 		{
-			char* result = fgets(outputBuffer, INPUT_BUFFER-1, stdin);
-			nbRead = strlen(outputBuffer);
-			
-			if (result && (nbRead > 0))
+			ch = getchar();
+			if (escaping)
 			{
-				write(_fifoOutputFD, outputBuffer, nbRead);
+				escaping = false;
+				switch (ch)
+				{
+					case '.':
+						stop = true;
+						break;
+					case '~':
+						write(_fifoOutputFD, &ch, 1);
+						break;
+				}
+			}
+			else if (ch == '~')
+			{
+				escaping = true;
 			}
 			else
 			{
-				break;
+				write(_fifoOutputFD, &ch, 1);
 			}
 		}
 		if (_fifoOutputFD != -1)

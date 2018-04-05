@@ -316,21 +316,13 @@ std::string DServer::getStatus()
 	std::list<std::unique_ptr<DConnexion>>::iterator itConnexion = _connexions.begin();
 	while(itConnexion != _connexions.end())
 	{
-		streamStatus << " - " << (*itConnexion)->getLine() << ": ";
-		if ((*itConnexion)->isValid())
-		{
-			streamStatus << (*itConnexion)->getNbClients() << " client(s)" << std::endl;
-			nbClientsConnected += (*itConnexion)->getNbClients();
-		}
-		else
-		{
-			streamStatus << " closing..." << std::endl;
-		}
+		streamStatus << " - " << (*itConnexion)->getStatus();
+		nbClientsConnected += (*itConnexion)->getNbClients();
 		itConnexion++;
 	}
         _connexionMutex.unlock();
 
-	streamStatus << "Total client(s): " << nbClientsConnected << " connected / " << _clients.size() << std::endl;
+	streamStatus << "Total client(s): " << nbClientsConnected << " / " << _clients.size() << " connected" << std::endl;
 
 	return streamStatus.str();
 }
