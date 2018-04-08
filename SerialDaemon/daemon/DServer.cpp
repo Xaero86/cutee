@@ -1,12 +1,12 @@
 #include "DServer.h"
 
 #include <unistd.h>
-#include <stdlib.h>
-#include <signal.h>
-
 #include <iostream>
 #include <sstream>
 #include <cstring>
+#include <cstdlib>
+#include <csignal>
+#include <cerrno>
 
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -14,7 +14,6 @@
 #include <sys/prctl.h>
 #include <netinet/in.h>
 
-#include <errno.h>
 
 #include "definition.h"
 #include "DClient.h"
@@ -69,7 +68,7 @@ void DServer::CreateAndStartDaemonServer(uint16_t p_port, int argc, char** argv)
 		memset(argv[i], '\0', strlen(argv[i]));
 	}
 	/* Change le nom du processus pour top */
-	prctl(PR_SET_NAME, daemonProcName, nullptr, nullptr, nullptr);
+	prctl(PR_SET_NAME, daemonProcName, NULL, NULL, NULL);
 
 	DServer daemonServer(p_port);
 	if (daemonServer.startServer())
@@ -80,19 +79,20 @@ void DServer::CreateAndStartDaemonServer(uint16_t p_port, int argc, char** argv)
 }
 
 DServer::DServer(uint16_t p_port)
-	: _port(p_port), _serverSocketFD(-1),
-	  _clientMutex(), _connexionMutex(), _logFile()
+	: _port(p_port), _serverSocketFD(-1), _logFile()
 {
+	pthread_mutex_init(&_clientMutex, NULL);
+	pthread_mutex_init(&_connexionMutex, NULL);
 }
 
 DServer::~DServer()
 {
-	std::list<std::unique_ptr<DClient>>::iterator itClient = _clients.begin();
+	std::list<DClient*>::iterator itClient = _clients.begin();
 	while(itClient != _clients.end())
 	{
 		itClient = _clients.erase(itClient);
 	}
-	std::list<std::unique_ptr<DConnexion>>::iterator itConnexion = _connexions.begin();
+	std::list<DConnexion*>::iterator itConnexion = _connexions.begin();
 	while(itConnexion != _connexions.end())
 	{
 		itConnexion = _connexions.erase(itConnexion);
@@ -131,7 +131,7 @@ void DServer::openLog()
 	streamLogFileName << WORKING_DIRECTORY << "/" << SERVER_LOG_FILE;
 	std::string logFileName = streamLogFileName.str();
 	
-        _logFile.open(logFileName, std::fstream::out);
+        _logFile.open(logFileName.c_str(), std::fstream::out);
 	if (!_logFile.is_open())
 	{
 		/* Invalidation du fichier de log: on peut toujours ecrire dessus, mais sans effet */
@@ -157,9 +157,9 @@ void DServer::eventLoop()
 		DClient* newClient = new DClient(clientSocketFD, this);
 		if (newClient->isValid())
 		{
-			_clientMutex.lock();
-			_clients.push_back(std::unique_ptr<DClient>(newClient));
-			_clientMutex.unlock();
+			pthread_mutex_lock(&_clientMutex);
+			_clients.push_back(newClient);
+			pthread_mutex_unlock(&_clientMutex);
 		}
 		else
 		{
@@ -171,16 +171,16 @@ void DServer::eventLoop()
 void DServer::connectClient(DClient *p_client)
 {
 	/* Parcours des connexions existantes pour ajouter le client */
-	int clientAdded = 0;
-	_connexionMutex.lock();
-	std::list<std::unique_ptr<DConnexion>>::iterator itConnexion = _connexions.begin();
-	while((itConnexion != _connexions.end()) && (clientAdded == 0))
+	int clientAdded = DCON_CLIENT_NOT_ADDED;
+	pthread_mutex_lock(&_connexionMutex);
+	std::list<DConnexion*>::iterator itConnexion = _connexions.begin();
+	while((itConnexion != _connexions.end()) && (clientAdded == DCON_CLIENT_NOT_ADDED))
 	{
 		clientAdded = ((*itConnexion)->tryAddClient(p_client));
 		itConnexion++;
 	}
-	_connexionMutex.unlock();
-	if (clientAdded == -1)
+	pthread_mutex_unlock(&_connexionMutex);
+	if (clientAdded == DCON_INCOMPAT_CONF)
 	{
 		/* La connexion est deja ouverte vers la cible mais avec d'autres parametres */
 		std::stringstream streamMessage;
@@ -188,7 +188,7 @@ void DServer::connectClient(DClient *p_client)
 		std::string message = streamMessage.str();
 		p_client->sendFatal(message);
 	}
-	else if (clientAdded == -2)
+	else if (clientAdded == DCON_INVALID_RESS)
 	{
 		/* La ressource n'existe pas, ou les droits sont pas suffisants */
 		std::stringstream streamMessage;
@@ -196,7 +196,15 @@ void DServer::connectClient(DClient *p_client)
 		std::string message = streamMessage.str();
 		p_client->sendFatal(message);
 	}
-	else if (clientAdded == 0)
+	else if (clientAdded == DCON_USER_CONNECTED)
+	{
+		/* La ressource n'existe pas, ou les droits sont pas suffisants */
+		std::stringstream streamMessage;
+		streamMessage << "User " << p_client->getUser() << " already to connect to " << p_client->getLine();
+		std::string message = streamMessage.str();
+		p_client->sendFatal(message);
+	}
+	else if (clientAdded == DCON_CLIENT_NOT_ADDED)
 	{
 		/* Le client n'a pas pu etre ajoute aux connexions existantes */
 		/* Creation d'une nouvelle connexion */
@@ -211,9 +219,9 @@ void DServer::connectClient(DClient *p_client)
 		}
 		if (newConnexion->isValid())
 		{
-			_connexionMutex.lock();
-			_connexions.push_back(std::unique_ptr<DConnexion>(newConnexion));
-			_connexionMutex.unlock();
+			pthread_mutex_lock(&_connexionMutex);
+			_connexions.push_back(newConnexion);
+			pthread_mutex_unlock(&_connexionMutex);
 			newConnexion->tryAddClient(p_client);
 		}
 		else
@@ -228,17 +236,17 @@ void DServer::connectClient(DClient *p_client)
 void DServer::handleDisconnect()
 {
 	/* Parcours de la liste des connexions pour supprimer les clients invalides */
-	_connexionMutex.lock();
-	std::list<std::unique_ptr<DConnexion>>::iterator itConnexion = _connexions.begin();
+	pthread_mutex_lock(&_connexionMutex);
+	std::list<DConnexion*>::iterator itConnexion = _connexions.begin();
 	while(itConnexion != _connexions.end())
 	{
 		(*itConnexion)->handleDisconnect();
 		itConnexion++;
 	}
-	_connexionMutex.unlock();
+	pthread_mutex_unlock(&_connexionMutex);
 	/* Parcours de la liste des clients pour supprimer ceux invalides */
-	_clientMutex.lock();
-	std::list<std::unique_ptr<DClient>>::iterator itClient = _clients.begin();
+	pthread_mutex_lock(&_clientMutex);
+	std::list<DClient*>::iterator itClient = _clients.begin();
 	while(itClient != _clients.end())
 	{
 		if ((*itClient)->isValid())
@@ -247,17 +255,18 @@ void DServer::handleDisconnect()
 		}
 		else
 		{
+			delete *itClient;
 			itClient = _clients.erase(itClient);
 		}
 	}
-	_clientMutex.unlock();
+	pthread_mutex_unlock(&_clientMutex);
 }
 
 void DServer::handleConnexionClosed()
 {
 	/* Parcours de la liste des connexions pour supprimer celles invalides */
-	_connexionMutex.lock();
-	std::list<std::unique_ptr<DConnexion>>::iterator itConnexion = _connexions.begin();
+	pthread_mutex_lock(&_connexionMutex);
+	std::list<DConnexion*>::iterator itConnexion = _connexions.begin();
 	while(itConnexion != _connexions.end())
 	{
 		if ((*itConnexion)->isAlive())
@@ -266,6 +275,7 @@ void DServer::handleConnexionClosed()
 		}
 		else
 		{
+			delete *itConnexion;
 			itConnexion = _connexions.erase(itConnexion);
 		}
 	}
@@ -274,7 +284,7 @@ void DServer::handleConnexionClosed()
 		_logFile << "No more connexion. Stopping daemon" << std::endl;
 		shutdown(_serverSocketFD, SHUT_RDWR);
 	}
-	_connexionMutex.unlock();
+	pthread_mutex_unlock(&_connexionMutex);
 }
 
 bool DServer::halt(std::string &p_cause)
@@ -292,8 +302,8 @@ bool DServer::halt(std::string &p_cause)
 		message = streamMessage.str();
 	}
 
-	_clientMutex.lock();
-	std::list<std::unique_ptr<DClient>>::iterator it = _clients.begin();
+	pthread_mutex_lock(&_clientMutex);
+	std::list<DClient*>::iterator it = _clients.begin();
 	while(it != _clients.end())
 	{
 		if ((*it)->isValid())
@@ -302,7 +312,7 @@ bool DServer::halt(std::string &p_cause)
 		}
 		it++;
 	}
-	_clientMutex.unlock();
+	pthread_mutex_unlock(&_clientMutex);
 }
 
 std::string DServer::getStatus()
@@ -312,15 +322,15 @@ std::string DServer::getStatus()
 
 	streamStatus << "Serial daemon: " << _connexions.size() << " connexion(s) opened" << std::endl;
 
-	_connexionMutex.lock();
-	std::list<std::unique_ptr<DConnexion>>::iterator itConnexion = _connexions.begin();
+	pthread_mutex_lock(&_connexionMutex);
+	std::list<DConnexion*>::iterator itConnexion = _connexions.begin();
 	while(itConnexion != _connexions.end())
 	{
 		streamStatus << " - " << (*itConnexion)->getStatus();
 		nbClientsConnected += (*itConnexion)->getNbClients();
 		itConnexion++;
 	}
-        _connexionMutex.unlock();
+	pthread_mutex_unlock(&_connexionMutex);
 
 	streamStatus << "Total client(s): " << nbClientsConnected << " / " << _clients.size() << " connected" << std::endl;
 

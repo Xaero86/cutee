@@ -2,12 +2,11 @@
 #define D_SERVER_H
 
 #include <stdint.h>
+
 #include <list>
 #include <iostream>
 #include <fstream>
 #include <string>
-#include <memory>
-#include <mutex>
 
 class DClient;
 class DConnexion;
@@ -33,14 +32,14 @@ private :
 	void openLog();
 	void eventLoop();
 
-	uint16_t                                _port;
-	int                                     _serverSocketFD;
-	std::list<std::unique_ptr<DClient>>     _clients;
-	std::list<std::unique_ptr<DConnexion>>  _connexions;
-	std::mutex                              _clientMutex;
-	std::mutex                              _connexionMutex;
+	uint16_t                      _port;
+	int                           _serverSocketFD;
+	std::list<DClient*>           _clients;
+	std::list<DConnexion*>        _connexions;
+	pthread_mutex_t               _clientMutex;
+	pthread_mutex_t               _connexionMutex;
 
-	std::ofstream                           _logFile;
+	std::ofstream                 _logFile;
 };
 
 #endif // D_SERVER_H

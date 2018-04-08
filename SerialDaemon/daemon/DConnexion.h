@@ -4,10 +4,15 @@
 #include <string>
 #include <list>
 #include <pthread.h>
-#include <mutex>
 
 class DServer;
 class DClient;
+
+#define DCON_CLIENT_NOT_ADDED 0
+#define DCON_CLIENT_ADDED     1
+#define DCON_INVALID_RESS     -1
+#define DCON_INCOMPAT_CONF    -2
+#define DCON_USER_CONNECTED   -3
 
 class DConnexion
 {
@@ -52,13 +57,12 @@ private:
 	bool                _alive;
 
 	std::list<DClient*> _clientsList;
-	std::mutex          _clientMutex;
+	pthread_mutex_t     _clientMutex;
 
 	std::string         _monitoringFifoName;
 	int                 _monitoringFifoFD;
 
 	pthread_t           _commThreadId;
-
 	pthread_t           _closeThreadId;
 
 	/* utilises pour debloquer read lorsque la liaison n'ecrit rien */

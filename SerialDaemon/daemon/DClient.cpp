@@ -17,7 +17,7 @@ DClient::DClient(int p_clientFD, DServer* p_server)
 	: _validity(false), _clientSocketFD(p_clientFD), _threadId(), _server(p_server),
 	  _line(), _speed(), _monitoring(false), _fifoInputPath(), _fifoInputFD(-1), _openInputThreadId(-1)
 {
-	int result = pthread_create(&_threadId, nullptr, DClient::StaticEventLoop, this);
+	int result = pthread_create(&_threadId, NULL, DClient::StaticEventLoop, this);
 	if (result == 0)
 	{
 		_validity = true;
@@ -68,6 +68,7 @@ void DClient::eventLoop()
 	msgData[KEY_VERSION] = "";
 	msgData[KEY_LINE] = "";
 	msgData[KEY_SPEED] = "";
+	msgData[KEY_USER] = "";
 	msgData[KEY_MONITOR] = "";
 	if (!receiveMessage(&msgData))
 	{
@@ -79,6 +80,7 @@ void DClient::eventLoop()
 	{
 		_line = msgData[KEY_LINE];
 		_speed = msgData[KEY_SPEED];
+		_user = msgData[KEY_USER];
 	}
 	else
 	{
@@ -150,7 +152,7 @@ bool DClient::receiveMessage(std::map<std::string, std::string> *p_dataExpected)
 		return true;
 	}
 
-	if (p_dataExpected != nullptr)
+	if (p_dataExpected != NULL)
 	{
 		/* Des donnees sont attendues sur le message, on les recupere */
 		std::map<std::string, std::string>::iterator iter;
@@ -208,7 +210,7 @@ bool DClient::setFifos(std::string &p_fifoInputPath, std::string &p_fifoOutputPa
 {
 	_fifoInputPath = p_fifoInputPath;
 
-	if (0 != pthread_create(&_openInputThreadId, nullptr, DClient::StaticOpenInputFifo, this))
+	if (0 != pthread_create(&_openInputThreadId, NULL, DClient::StaticOpenInputFifo, this))
 	{
 		return false;
 	}

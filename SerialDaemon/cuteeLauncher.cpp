@@ -1,10 +1,11 @@
-#include <iostream>
 #include <unistd.h>
+#include <cerrno>
+#include <cstdlib>
+#include <iostream>
+#include <csignal>
+
 #include <sys/types.h>
 #include <sys/stat.h>
-#include <errno.h>
-#include <stdlib.h>
-#include <signal.h>
 
 #include "definition.h"
 #include "DServer.h"
@@ -20,8 +21,9 @@ int main(int argc, char** argv)
 	std::string line;
 	std::string speed;
 	bool monitoring = false;
+	bool onePerUser = false;
 
-	while ((opt = getopt(argc, argv, "s:l:mv?")) != -1)
+	while ((opt = getopt(argc, argv, "s:l:muv?")) != -1)
 	{
 		switch (opt)
 		{
@@ -33,6 +35,9 @@ int main(int argc, char** argv)
 				break;
 			case 'm':
 				monitoring = true;
+				break;
+			case 'u':
+				onePerUser = true;
 				break;
 			case 'v':
 				version();
@@ -88,7 +93,7 @@ int main(int argc, char** argv)
 	{
 		/* process pere */
 		/* connexion au daemon */
-		AClient::CreateAndConnecteClient(DAEMON_PORT, line, speed, monitoring);
+		AClient::CreateAndConnecteClient(DAEMON_PORT, line, speed, monitoring, onePerUser);
 	}
 	else
 	{
@@ -107,6 +112,7 @@ static void usage()
 	std::cout << "  -l line    Name the line to use by giving a device name." << std::endl;
 	std::cout << "  -m         Open cutee daemon monitoring connexion. Other option will be ignored." << std::endl;
 	std::cout << "  -s speed   The speed (baud rate) to use." << std::endl;
+	std::cout << "  -u         If current user has already open a connection to the line, the call will return immediatly." << std::endl;
 	std::cout << "  -v         Report version information and exit." << std::endl;
 	std::cout << "  -?         Print a help message and exit." << std::endl;
 }

@@ -15,6 +15,7 @@
 #define KEY_LINE    "line"
 #define KEY_SPEED   "speed"
 #define KEY_MONITOR "monitoring"
+#define KEY_USER    "user"
 #define KEY_OUTPATH "outputPath"
 #define KEY_INPATH  "inputPath"
 #define KEY_INFO    "info"
@@ -26,7 +27,6 @@
 #define WORKING_DIRECTORY "/tmp/serialDaemon/"
 #define SERVER_LOG_FILE   "serialDaemon.log"
 
-/* Element pour le serveur */
-#define INPUT_BUFFER 1024
+#define FIFO_BUFFER 2048
 
 #endif // DEFINITION_H

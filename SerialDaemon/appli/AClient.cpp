@@ -2,15 +2,16 @@
 
 #include <unistd.h>
 #include <cstring>
-#include <signal.h>
+#include <cstdlib>
+#include <csignal>
+#include <cstdio>
+#include <iostream>
 
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <pwd.h>
 #include <fcntl.h>
-
-#include <iostream>
 #include <termios.h>
 
 #include "ClientServerComm.h"
@@ -18,12 +19,12 @@
 /* Liste des versions de serveur incompatible, a completer en cas de rupture d'interface client/serveur */
 static const std::string G_IncompatibleServer[] = {  };
 
-AClient *AClient::G_ClientInstance = nullptr;
+AClient *AClient::G_ClientInstance = NULL;
 struct termios AClient::G_NormalTerm;
 
-void AClient::CreateAndConnecteClient(uint16_t p_port, std::string p_line, std::string p_speed, bool p_monitoring)
+void AClient::CreateAndConnecteClient(uint16_t p_port, std::string p_line, std::string p_speed, bool p_monitoring, bool p_onePerUser)
 {
-	AClient client(p_port, p_line, p_speed, p_monitoring);
+	AClient client(p_port, p_line, p_speed, p_monitoring, p_onePerUser);
 	if (client.connectToServer())
 	{
 		struct termios newTerm;
@@ -43,7 +44,7 @@ void AClient::CreateAndConnecteClient(uint16_t p_port, std::string p_line, std::
 		tcsetattr(STDIN_FILENO, TCSANOW, &newTerm);
 
 		client.eventLoop();
-		G_ClientInstance = nullptr;
+		G_ClientInstance = NULL;
 	}
 	else
 	{
@@ -53,7 +54,7 @@ void AClient::CreateAndConnecteClient(uint16_t p_port, std::string p_line, std::
 
 void AClient::SignalHandler(int p_signo)
 {
-	if (G_ClientInstance == nullptr)
+	if (G_ClientInstance == NULL)
 	{
 		exit(-1);
 	}
@@ -80,9 +81,9 @@ void AClient::reinitTerm()
 	tcsetattr(STDIN_FILENO, TCSANOW, &G_NormalTerm);
 }
 
-AClient::AClient(uint16_t p_port, std::string &p_line, std::string &p_speed, bool p_monitoring)
-	: _port(p_port), _line(p_line), _speed(p_speed), _monitoring(p_monitoring), _clientSocketFD(-1),
-	  _fifoInputPath(), _fifoInputFD(-1), _inputThreadId(-1),
+AClient::AClient(uint16_t p_port, std::string &p_line, std::string &p_speed, bool p_monitoring, bool p_onePerUser)
+	: _port(p_port), _line(p_line), _speed(p_speed), _monitoring(p_monitoring), _onePerUser(p_onePerUser),
+	  _clientSocketFD(-1), _fifoInputPath(), _fifoInputFD(-1), _inputThreadId(-1),
 	  _fifoOutputPath(), _fifoOutputFD(-1), _outputThreadId(-1)
 {
 }
@@ -175,6 +176,10 @@ void AClient::eventLoop()
 	{
 		msgData[KEY_MONITOR] = "YES";
 	}
+	if (_onePerUser)
+	{
+		msgData[KEY_USER] = getUser();
+	}
 
 	if (!sendMessage(msgData))
 	{
@@ -191,13 +196,13 @@ void AClient::eventLoop()
 		return;
 	}
 	_fifoInputPath = msgData[KEY_INPATH];
-	if (0 != pthread_create(&_inputThreadId, nullptr, AClient::StaticInputLoop, this))
+	if (0 != pthread_create(&_inputThreadId, NULL, AClient::StaticInputLoop, this))
 	{
 		std::cerr << "Internal error" << std::endl;
 		return;
 	}
 	_fifoOutputPath = msgData[KEY_OUTPATH];
-	if (0 != pthread_create(&_outputThreadId, nullptr, AClient::StaticOutputLoop, this))
+	if (0 != pthread_create(&_outputThreadId, NULL, AClient::StaticOutputLoop, this))
 	{
 		std::cerr << "Internal error" << std::endl;
 		return;
@@ -255,7 +260,7 @@ bool AClient::receiveMessage(std::map<std::string, std::string> *p_dataExpected)
 		return false;
 	}
 
-	if (p_dataExpected != nullptr)
+	if (p_dataExpected != NULL)
 	{
 		/* Des donnees sont attendues sur le message, on les recupere */
 		std::map<std::string, std::string>::iterator iter;
@@ -285,21 +290,25 @@ bool AClient::sendMessage(std::map<std::string, std::string> &p_data)
 	return (write(_clientSocketFD, msgBuffer, msgLength) >= 0);
 }
 
+std::string AClient::getUser()
+{
+	struct passwd *pw = getpwuid(getuid());
+	if (pw)
+	{
+		return std::string(pw->pw_name);
+	}
+	else
+	{
+		return std::string();
+	}
+}
+
 /* Envoi d'un message d'arret au serveur, avec le nom du user en parametre si possible */
 void AClient::sendServerHalt()
 {
 	std::map<std::string, std::string> msgData;
-	struct passwd *pw = getpwuid(getuid());
 
-	if (pw)
-	{
-		msgData[KEY_HALTSER] = std::string(pw->pw_name);
-	}
-	else
-	{
-		msgData[KEY_HALTSER] = "";
-	}
-
+	msgData[KEY_HALTSER] = getUser();
 	sendMessage(msgData);
 }
 
@@ -314,13 +323,13 @@ void AClient::inputLoop()
 
 	if (_fifoInputFD != -1)
 	{
-		char inputBuffer[INPUT_BUFFER];
+		char inputBuffer[FIFO_BUFFER];
 		unsigned int nbRead;
-		memset(inputBuffer, 0, INPUT_BUFFER);
+		memset(inputBuffer, 0, FIFO_BUFFER);
 
 		while (true)
 		{
-			nbRead = read(_fifoInputFD, inputBuffer, INPUT_BUFFER-1);
+			nbRead = read(_fifoInputFD, inputBuffer, FIFO_BUFFER-1);
 			if (nbRead > 0)
 			{
 				std::cout.write(inputBuffer, nbRead);

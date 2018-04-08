@@ -11,7 +11,7 @@
 class AClient
 {
 public:
-	static void CreateAndConnecteClient(uint16_t p_port, std::string p_line, std::string p_speed, bool p_monitoring);
+	static void CreateAndConnecteClient(uint16_t p_port, std::string p_line, std::string p_speed, bool p_monitoring, bool p_onePerUser);
 	static void SignalHandler(int p_signo);
 	static void reinitTerm();
 	static AClient *G_ClientInstance;
@@ -22,11 +22,12 @@ public:
 	void sendServerHalt();
 
 private:
-	AClient(uint16_t p_port, std::string &p_line, std::string &p_speed, bool p_monitoring);
+	AClient(uint16_t p_port, std::string &p_line, std::string &p_speed, bool p_monitoring, bool p_onePerUser);
 	bool connectToServer();
 	void eventLoop();
-	bool receiveMessage(std::map<std::string, std::string> *p_dataExpected = nullptr);
+	bool receiveMessage(std::map<std::string, std::string> *p_dataExpected = NULL);
 	bool sendMessage(std::map<std::string, std::string> &p_data);
+	std::string getUser();
 
 	bool startInputLoop(std::string &p_fifoPath);
 	static void* StaticInputLoop(void *p_client);
@@ -39,6 +40,8 @@ private:
 	std::string         _line;
 	std::string         _speed;
 	bool                _monitoring;
+	bool                _onePerUser;
+
 	int                 _clientSocketFD;
 
 	std::string         _fifoInputPath;

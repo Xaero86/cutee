@@ -6,19 +6,21 @@
 
 #include <unistd.h>
 #include <sstream>
+#include <cstring>
+#include <cerrno>
+
+#include <fcntl.h>
+#include <termios.h>
 #include <sys/types.h>
 #include <sys/stat.h>
-#include <fcntl.h>
-#include <cstring>
-#include <errno.h>
-#include <termios.h>
 
 DConnexion::DConnexion(DServer* p_server, std::string &p_line, std::string &p_speed)
 	: _server(p_server), _line(p_line), _isMonitoring(false),
 	  _valid(false), _alive(false), _monitoringLoopback(false),
-	  _serialFD(-1), _clientMutex(), _commThreadId(),
+	  _serialFD(-1), _commThreadId(),
 	  _monitoringFifoName(), _monitoringFifoFD(-1)
 {
+	pthread_mutex_init(&_clientMutex, NULL);
 	_internalPipeFDs[0] = -1;
 	_internalPipeFDs[1] = -1;
 
@@ -33,7 +35,7 @@ DConnexion::DConnexion(DServer* p_server, std::string &p_line, std::string &p_sp
 	_valid = true;
 	_alive = true;
 
-	if (pthread_create(&_commThreadId, nullptr, DConnexion::StaticCommLoop, this) != 0)
+	if (pthread_create(&_commThreadId, NULL, DConnexion::StaticCommLoop, this) != 0)
 	{
 		_server->logFile() << "Internal error: Unable to create communication thread" << std::endl;
 		_valid = false;
@@ -43,9 +45,10 @@ DConnexion::DConnexion(DServer* p_server, std::string &p_line, std::string &p_sp
 DConnexion::DConnexion(DServer* p_server)
 	: _server(p_server), _speed(0), _isMonitoring(true),
 	  _valid(false), _alive(false), _monitoringLoopback(false),
-	  _serialFD(-1), _clientMutex(), _commThreadId(),
+	  _serialFD(-1), _commThreadId(),
 	  _monitoringFifoName(), _monitoringFifoFD(-1)
 {
+	pthread_mutex_init(&_clientMutex, NULL);
 	_internalPipeFDs[0] = -1;
 	_internalPipeFDs[1] = -1;
 
@@ -73,7 +76,7 @@ DConnexion::DConnexion(DServer* p_server)
 	_valid = true;
 	_alive = true;
 
-	if (pthread_create(&_commThreadId, nullptr, DConnexion::StaticCommLoop, this) != 0)
+	if (pthread_create(&_commThreadId, NULL, DConnexion::StaticCommLoop, this) != 0)
 	{
 		_server->logFile() << "Internal error: Unable to create communication thread" << std::endl;
 		_valid = false;
@@ -83,13 +86,15 @@ DConnexion::DConnexion(DServer* p_server)
 DConnexion::~DConnexion()
 {
 	_valid = false;
-	_clientMutex.lock();
+	pthread_mutex_lock(&_clientMutex);
 	std::list<DClient*>::iterator it = _clientsList.begin();
 	while(it != _clientsList.end())
 	{
 		it = _clientsList.erase(it);
 	}
-	_clientMutex.unlock();
+	pthread_mutex_unlock(&_clientMutex);
+
+	pthread_mutex_destroy(&_clientMutex);
 
 	if (_serialFD != -1)
 	{
@@ -158,9 +163,9 @@ void DConnexion::inputLoop()
 {
 	std::list<DClient*>::iterator itClient;
 
-	char inputBuffer[INPUT_BUFFER];
+	char inputBuffer[FIFO_BUFFER];
 	int nbRead;
-	memset(inputBuffer, 0, INPUT_BUFFER);
+	memset(inputBuffer, 0, FIFO_BUFFER);
 
 	fd_set setOfFDs;
 	int fdmax = (_serialFD < _internalPipeFDs[0])?_internalPipeFDs[0]:_serialFD;
@@ -170,8 +175,8 @@ void DConnexion::inputLoop()
 		FD_ZERO(&setOfFDs);
 		FD_SET(_serialFD, &setOfFDs);
 		FD_SET(_internalPipeFDs[0], &setOfFDs);
-		select(fdmax+1, &setOfFDs, nullptr, nullptr, nullptr);
-		nbRead = read(_serialFD, inputBuffer, INPUT_BUFFER-1);
+		select(fdmax+1, &setOfFDs, NULL, NULL, NULL);
+		nbRead = read(_serialFD, inputBuffer, FIFO_BUFFER-1);
 
 		if (FD_ISSET(_internalPipeFDs[0], &setOfFDs) || (nbRead <= 0))
 		{
@@ -181,27 +186,27 @@ void DConnexion::inputLoop()
 		if (nbRead > 0)
 		{
 _server->logFile() << "nbRead: " << nbRead << std::endl;
-			_clientMutex.lock();
+			pthread_mutex_lock(&_clientMutex);
 			itClient = _clientsList.begin();
 			while(itClient != _clientsList.end())
 			{
 				(*itClient)->writeToInputFifo(inputBuffer, nbRead);
 				itClient++;
 			}
-			_clientMutex.unlock();
+			pthread_mutex_unlock(&_clientMutex);
 		}
 	}
 
 	/* On informe les clients de la rupture. Ils se deconnecteront */
 	std::string messageStr("Rupture");
-	_clientMutex.lock();
+	pthread_mutex_lock(&_clientMutex);
 	itClient = _clientsList.begin();
 	while(itClient != _clientsList.end())
 	{
 		(*itClient)->sendFatal(messageStr);
 		itClient++;
 	}
-	_clientMutex.unlock();	
+	pthread_mutex_unlock(&_clientMutex);
 }
 
 void DConnexion::monitoringLoop()
@@ -213,15 +218,15 @@ void DConnexion::monitoringLoop()
 		return;
 	}
 
-	char monitoringBuffer[INPUT_BUFFER];
+	char monitoringBuffer[FIFO_BUFFER];
 	int nbRead;
-	memset(monitoringBuffer, 0, INPUT_BUFFER);
+	memset(monitoringBuffer, 0, FIFO_BUFFER);
 
 	std::list<DClient*>::iterator itClient;
 
 	while (_valid)
 	{
-		nbRead = read(_monitoringFifoFD, monitoringBuffer, INPUT_BUFFER-1);
+		nbRead = read(_monitoringFifoFD, monitoringBuffer, FIFO_BUFFER-1);
 		if (nbRead > 0)
 		{
 			std::string response;
@@ -249,14 +254,14 @@ void DConnexion::monitoringLoop()
 			}
 			if (response.length() > 0)
 			{
-				_clientMutex.lock();
+				pthread_mutex_lock(&_clientMutex);
 				itClient = _clientsList.begin();
 				while(itClient != _clientsList.end())
 				{
 					(*itClient)->writeToInputFifo(response.c_str(), response.length());
 					itClient++;
 				}
-				_clientMutex.unlock();
+				pthread_mutex_unlock(&_clientMutex);
 			}
 		}
 		else
@@ -272,17 +277,18 @@ int DConnexion::tryAddClient(DClient *p_client)
 	/* On regarde si cette connexion peut gerer ce client */
 	if (!_valid)
 	{
-		return 0;
+		return DCON_CLIENT_NOT_ADDED;
 	}
 	if (_isMonitoring && p_client->isMonitoring())
 	{
 		addClient(p_client);
-		return 1;
+		return DCON_CLIENT_ADDED;
 	}
 	else if (!_isMonitoring && !(p_client->isMonitoring()))
 	{
 		std::string line = p_client->getLine();
 		int speed = readSpeed(p_client->getSpeed());
+		std::string user = p_client->getUser();
 
 		struct stat infoNewCli;
 		struct stat infoCurCnx;
@@ -290,13 +296,13 @@ int DConnexion::tryAddClient(DClient *p_client)
 		if (0 != stat(line.c_str(), &infoNewCli))
 		{
 			/* Probleme d'acces a la ressource, le client est supprime */
-			return -2;
+			return DCON_INVALID_RESS;
 		}
 		if (0 != stat(_line.c_str(), &infoCurCnx))
 		{
 			/* La ressource de la connexion devrait etre valide */
 			/* Si elle a ete rendue invalide depuis la creation de la connexion, pas de nouveaux clients */
-			return 0;
+			return DCON_CLIENT_NOT_ADDED;
 		}
 
 		/* Comparaison des inodes des ressources */
@@ -307,24 +313,47 @@ int DConnexion::tryAddClient(DClient *p_client)
 			if (speed == _speed)
 			{
 				/* Parametre de connexion identique => OK */
+				if (!user.empty())
+				{
+					/* si le client a un user identifie, refuser la connexion si le user est deja connecte */
+					pthread_mutex_lock(&_clientMutex);
+					std::list<DClient*>::iterator it = _clientsList.begin();
+					bool found = false;
+					while ((it != _clientsList.end()) && (!found))
+					{
+						if ((*it)->isValid())
+						{
+							if (0 == user.compare((*it)->getUser()))
+							{
+								found = true;
+							}
+						}
+						it++;
+					}
+					pthread_mutex_unlock(&_clientMutex);
+					if (found)
+					{
+						return DCON_USER_CONNECTED;
+					}
+				}
 				addClient(p_client);
-				return 1;
+				return DCON_CLIENT_ADDED;
 			}
 			else
 			{
 				/* Parametre de connexion different => client supprime */
-				return -1;
+				return DCON_INCOMPAT_CONF;
 			}
 		}
 		else
 		{
 			/* pas la meme ressource, cette connexion ne gere pas ce client */
-			return 0;
+			return DCON_CLIENT_NOT_ADDED;
 		}
 	}
 	else
 	{
-		return 0;
+		return DCON_CLIENT_NOT_ADDED;
 	}
 }
 
@@ -360,9 +389,9 @@ void DConnexion::addClient(DClient *p_client)
 		p_client->setFifos(fifoNameStr, _monitoringFifoName);
 	}
 
-	_clientMutex.lock();
+	pthread_mutex_lock(&_clientMutex);
 	_clientsList.push_back(p_client);
-	_clientMutex.unlock();
+	pthread_mutex_unlock(&_clientMutex);
 
 	std::stringstream message;
 	message << "Connected to " << _line;
@@ -416,7 +445,7 @@ bool DConnexion::openConnexion()
 
 void DConnexion::handleDisconnect()
 {
-	_clientMutex.lock();
+	pthread_mutex_lock(&_clientMutex);
 	std::list<DClient*>::iterator it = _clientsList.begin();
 	while(it != _clientsList.end())
 	{
@@ -434,17 +463,17 @@ void DConnexion::handleDisconnect()
 	{
 		_valid = false;
 		/* Thread pour attendre la fin des thread input et output et declarer au serveur la fin de la connexion */
-		if (pthread_create(&_closeThreadId, nullptr, DConnexion::StaticCloseConnexion, this) != 0)
+		if (pthread_create(&_closeThreadId, NULL, DConnexion::StaticCloseConnexion, this) != 0)
 		{
 			/* on arrive pas a creer le thread pour fermer proprement... on ferme comme on peut... */
 			_server->logFile() << "Internal error: Unable to create disconnection thread" << std::endl;
 			_alive = false;
-			_clientMutex.unlock();
+			pthread_mutex_unlock(&_clientMutex);
 			_server->handleConnexionClosed();
 			return;
 		}
 	}
-	_clientMutex.unlock();
+	pthread_mutex_unlock(&_clientMutex);
 }
 
 void* DConnexion::StaticCloseConnexion(void *p_connexion)
@@ -469,7 +498,7 @@ void DConnexion::closeConnexion()
 	/* on laisse 1 seconde au thread pour finir */
 	date.tv_sec += 1;
 
-	result = pthread_timedjoin_np(_commThreadId, nullptr, &date);
+	result = pthread_timedjoin_np(_commThreadId, NULL, &date);
 	if (result != 0)
 	{
 		pthread_cancel(_commThreadId);
@@ -486,7 +515,28 @@ std::string DConnexion::getStatus()
 	streamStatus << _line << ": ";
 	if (_valid)
 	{
-		streamStatus << _clientsList.size() << " client(s)" << std::endl;
+		streamStatus << _clientsList.size() << " client(s): ";
+
+		int nbAnonymes = 0;
+		pthread_mutex_lock(&_clientMutex);
+		std::list<DClient*>::iterator it = _clientsList.begin();
+		while (it != _clientsList.end())
+		{
+			if ((*it)->isValid())
+			{
+				if (!((*it)->getUser()).empty())
+				{
+					streamStatus << (*it)->getUser() << ", ";
+				}
+				else
+				{
+					nbAnonymes++;
+				}
+			}
+			it++;
+		}
+		pthread_mutex_unlock(&_clientMutex);
+		streamStatus << nbAnonymes << " anonymous" << std::endl;
 	}
 	else
 	{

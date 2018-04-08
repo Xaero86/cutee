@@ -17,6 +17,7 @@ public :
 
 	std::string &getLine() {return _line;}
 	std::string &getSpeed() {return _speed;}
+	std::string &getUser() {return _user;}
 	bool isMonitoring() {return _monitoring;}
 
 	void writeToInputFifo(const char* p_data, size_t p_size);
@@ -30,7 +31,7 @@ public :
 private :
 	static void* StaticEventLoop(void *p_client);
 	void eventLoop();
-	bool receiveMessage(std::map<std::string, std::string> *p_dataExpected = nullptr);
+	bool receiveMessage(std::map<std::string, std::string> *p_dataExpected = NULL);
 	bool sendMessage(std::map<std::string, std::string> &p_data);
 
 	static void* StaticOpenInputFifo(void *p_client);
@@ -42,6 +43,7 @@ private :
 	DServer*       _server;
 	std::string    _line;
 	std::string    _speed;
+	std::string    _user;
 	bool           _monitoring;
 
 	std::string    _fifoInputPath;
