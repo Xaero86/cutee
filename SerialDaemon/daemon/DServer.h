@@ -15,13 +15,15 @@ class DServer
 {
 public :
 	static void CreateAndStartDaemonServer(uint16_t p_port, int argc, char** argv);
+	static void SignalHandler(int p_signo);
+	static DServer *G_ServerInstance;
 
 	virtual ~DServer();
 
 	void handleDisconnect();
 	void handleConnexionClosed();
 	void connectClient(DClient *p_client);
-	bool halt(std::string &p_cause);
+	bool halt(std::string p_cause = "");
 
 	std::ofstream &logFile() {return _logFile;}
 	std::string getStatus();

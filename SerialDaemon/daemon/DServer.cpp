@@ -19,6 +19,8 @@
 #include "DClient.h"
 #include "DConnexion.h"
 
+DServer *DServer::G_ServerInstance = NULL;
+
 void DServer::CreateAndStartDaemonServer(uint16_t p_port, int argc, char** argv)
 {
 	if (setsid() < 0)
@@ -43,8 +45,6 @@ void DServer::CreateAndStartDaemonServer(uint16_t p_port, int argc, char** argv)
 		/* le process pere retourne et stop */
 		return;
 	}
-
-	signal(SIGPIPE, SIG_IGN);
 
 	/* Modification du umask */
 	umask(0);
@@ -73,8 +73,29 @@ void DServer::CreateAndStartDaemonServer(uint16_t p_port, int argc, char** argv)
 	DServer daemonServer(p_port);
 	if (daemonServer.startServer())
 	{
+		G_ServerInstance = &daemonServer;
+		/* Nettoyage des ressources sur kill */
+		signal(SIGINT,  SignalHandler);
+		/* SIGPIPE traite sur read et write, pas sur signal */
+		signal(SIGPIPE, SIG_IGN);
+
 		daemonServer.openLog();
 		daemonServer.eventLoop();
+		G_ServerInstance = NULL;
+	}
+}
+
+void DServer::SignalHandler(int p_signo)
+{
+	if (G_ServerInstance == NULL)
+	{
+		exit(-1);
+	}
+	if (p_signo == SIGINT)
+	{
+		/* En cas de kill sur le serveur, on essaye de l'arreter proprement: nettoyage des ressources */
+		/* Si ca bloque faire un kill -9 */
+		G_ServerInstance->halt();
 	}
 }
 
@@ -87,14 +108,17 @@ DServer::DServer(uint16_t p_port)
 
 DServer::~DServer()
 {
+	/* Pas de protection par mutex ici: pour ne pas bloquer l'arret si probleme */
 	std::list<DClient*>::iterator itClient = _clients.begin();
 	while(itClient != _clients.end())
 	{
+		delete *itClient;
 		itClient = _clients.erase(itClient);
 	}
 	std::list<DConnexion*>::iterator itConnexion = _connexions.begin();
 	while(itConnexion != _connexions.end())
 	{
+		delete *itConnexion;
 		itConnexion = _connexions.erase(itConnexion);
 	}
 	if (_serverSocketFD != -1)
@@ -112,7 +136,7 @@ bool DServer::startServer()
 	_serverSocketFD = socket(AF_INET, SOCK_STREAM, 0);
 	if (_serverSocketFD == -1)
 	{
-		_logFile << "Unable to create server socket" << std::endl;
+		/* On peut pas logger ici: stderr deja ferme et le fichier de log pas encore ouvert. */
 		return false;
 	}
 	else
@@ -144,11 +168,6 @@ void DServer::eventLoop()
 	struct sockaddr_in clientSocket;
 	int socketStructSize = sizeof(struct sockaddr_in);
 	int clientSocketFD;
-
-	if (_serverSocketFD == -1)
-	{
-		return;
-	}
 
 	listen(_serverSocketFD, 3);
 
@@ -198,7 +217,7 @@ void DServer::connectClient(DClient *p_client)
 	}
 	else if (clientAdded == DCON_USER_CONNECTED)
 	{
-		/* La ressource n'existe pas, ou les droits sont pas suffisants */
+		/* Connexion limitee a 1 par utilisateur et l'utilisateur deja connecte */
 		std::stringstream streamMessage;
 		streamMessage << "User " << p_client->getUser() << " already to connect to " << p_client->getLine();
 		std::string message = streamMessage.str();
@@ -226,8 +245,11 @@ void DServer::connectClient(DClient *p_client)
 		}
 		else
 		{
+			/* Impossible de se connecter */
 			delete newConnexion;
-			std::string message("Fail to create another connexion");
+			std::stringstream streamMessage;
+			streamMessage << "Unable to connect to " << p_client->getLine();
+			std::string message = streamMessage.str();
 			p_client->sendFatal(message);
 		}
 	}
@@ -287,8 +309,9 @@ void DServer::handleConnexionClosed()
 	pthread_mutex_unlock(&_connexionMutex);
 }
 
-bool DServer::halt(std::string &p_cause)
+bool DServer::halt(std::string p_cause)
 {
+	/* Fermeture forcee du serveur: on demande a chaque client de se deconnecter */
 	std::string message = "";
 
 	if (p_cause.empty())

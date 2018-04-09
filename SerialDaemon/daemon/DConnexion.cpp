@@ -91,6 +91,7 @@ DConnexion::~DConnexion()
 	while(it != _clientsList.end())
 	{
 		it = _clientsList.erase(it);
+		/* On delete pas les clients ici. C'est au serveur de gerer les clients */
 	}
 	pthread_mutex_unlock(&_clientMutex);
 
@@ -185,7 +186,6 @@ void DConnexion::inputLoop()
 		}
 		if (nbRead > 0)
 		{
-_server->logFile() << "nbRead: " << nbRead << std::endl;
 			pthread_mutex_lock(&_clientMutex);
 			itClient = _clientsList.begin();
 			while(itClient != _clientsList.end())
@@ -395,16 +395,18 @@ void DConnexion::addClient(DClient *p_client)
 
 	std::stringstream message;
 	message << "Connected to " << _line;
+	if (_isMonitoring)
+	{
+		message << "\nPress s to display statistics.";
+		message << "\nPress l to active loopback.";
+	}
 	std::string messageStr = message.str();
 	p_client->sendInfo(messageStr);
 }
 
 bool DConnexion::openConnexion()
 {
-	if (_isMonitoring)
-	{
-		return true;
-	}
+	/* ouverture en non bloquant, pour l'utilisation de select */
 	_serialFD = open(_line.c_str(), O_RDWR | O_NOCTTY | O_NDELAY);
 	if (_serialFD < 0)
 	{
@@ -438,6 +440,8 @@ bool DConnexion::openConnexion()
 		return false;
 	}
 
+	/* ouverture en non bloquant, pour l'utilisation de select */
+	/* ca sert a debloquer le thread de lecture lors de la fermeture de la connexion */
 	pipe2(_internalPipeFDs, O_NONBLOCK);
 	
 	return true;
@@ -455,6 +459,7 @@ void DConnexion::handleDisconnect()
 		}
 		else
 		{
+			/* on delete pas le client ici. c'est fait cote DServer */
 			it = _clientsList.erase(it);
 		}
 	}
@@ -462,8 +467,8 @@ void DConnexion::handleDisconnect()
 	if (_clientsList.size() == 0)
 	{
 		_valid = false;
-		/* Thread pour attendre la fin des thread input et output et declarer au serveur la fin de la connexion */
-		if (pthread_create(&_closeThreadId, NULL, DConnexion::StaticCloseConnexion, this) != 0)
+		/* Thread pour attendre la fin du thread de comm et declarer au serveur la fin de la connexion */
+		if (0 != pthread_create(&_closeThreadId, NULL, DConnexion::StaticCloseConnexion, this))
 		{
 			/* on arrive pas a creer le thread pour fermer proprement... on ferme comme on peut... */
 			_server->logFile() << "Internal error: Unable to create disconnection thread" << std::endl;
@@ -479,7 +484,7 @@ void DConnexion::handleDisconnect()
 void* DConnexion::StaticCloseConnexion(void *p_connexion)
 {
 	((DConnexion*) p_connexion)->closeConnexion();
-	/* handleConnexionClosed va detruire l'objet connexion, autant l'appeler ici */
+	/* handleConnexionClosed va detruire l'objet p_connexion */
 	((DConnexion*) p_connexion)->_server->handleConnexionClosed();
 }
 
@@ -493,13 +498,11 @@ void DConnexion::closeConnexion()
 	}
 
 	struct timespec date;
-	int result;
 	clock_gettime(CLOCK_REALTIME, &date);
 	/* on laisse 1 seconde au thread pour finir */
 	date.tv_sec += 1;
 
-	result = pthread_timedjoin_np(_commThreadId, NULL, &date);
-	if (result != 0)
+	if (0 != pthread_timedjoin_np(_commThreadId, NULL, &date))
 	{
 		pthread_cancel(_commThreadId);
 		_server->logFile() << "Warning: Force close communication thread of " << _line << std::endl;
@@ -544,3 +547,4 @@ std::string DConnexion::getStatus()
 	}
 	return streamStatus.str();
 }
+

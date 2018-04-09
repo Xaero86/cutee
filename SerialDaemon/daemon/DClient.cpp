@@ -17,8 +17,7 @@ DClient::DClient(int p_clientFD, DServer* p_server)
 	: _validity(false), _clientSocketFD(p_clientFD), _threadId(), _server(p_server),
 	  _line(), _speed(), _monitoring(false), _fifoInputPath(), _fifoInputFD(-1), _openInputThreadId(-1)
 {
-	int result = pthread_create(&_threadId, NULL, DClient::StaticEventLoop, this);
-	if (result == 0)
+	if (0 == pthread_create(&_threadId, NULL, DClient::StaticEventLoop, this))
 	{
 		_validity = true;
 	}
@@ -48,6 +47,7 @@ void* DClient::StaticEventLoop(void *p_client)
 {
 	((DClient*)p_client)->eventLoop();
 	((DClient*)p_client)->_validity = false;
+	/* Le serveur va detruire l'objet p_client lors de cet appel */
 	((DClient*)p_client)->_server->handleDisconnect();
 }
 
@@ -216,7 +216,7 @@ bool DClient::setFifos(std::string &p_fifoInputPath, std::string &p_fifoOutputPa
 	}
 
 	std::map<std::string, std::string> msgData;
-	/* Le serveur envoie au client la ressource pour communiquer les donnees venant de la connexion */
+	/* Le serveur envoie au client les ressources pour communiquer avec la connexion */
 	msgData[KEY_INPATH] = _fifoInputPath;
 	msgData[KEY_OUTPATH] = p_fifoOutputPath;
 	return sendMessage(msgData);
@@ -229,6 +229,7 @@ void* DClient::StaticOpenInputFifo(void *p_client)
 
 void DClient::openInputFifo()
 {
+	/* l'ouverture d'une fifo en ecriture est bloquante, d'ou le thread */
 	_fifoInputFD = open(_fifoInputPath.c_str(), O_WRONLY);
 	if (_fifoInputFD == -1)
 	{

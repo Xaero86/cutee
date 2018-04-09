@@ -36,12 +36,12 @@ void AClient::CreateAndConnecteClient(uint16_t p_port, std::string p_line, std::
 		signal(SIGPIPE, SIG_IGN);
 
 		/* Gestion du terminal: stdin */
-		atexit(reinitTerm);
 		/* Empeche echo des caracteres entres */
 		tcgetattr(STDIN_FILENO, &G_NormalTerm);
 		newTerm = G_NormalTerm;
 		newTerm.c_lflag &= ~(ICANON | ECHO);
 		tcsetattr(STDIN_FILENO, TCSANOW, &newTerm);
+		atexit(reinitTerm);
 
 		client.eventLoop();
 		G_ClientInstance = NULL;
@@ -64,12 +64,7 @@ void AClient::SignalHandler(int p_signo)
 	}
 	if (p_signo == SIGINT)
 	{
-		if (G_ClientInstance->_fifoOutputFD != -1)
-		{
-			char ch = 0x03;
-			write(G_ClientInstance->_fifoOutputFD, &ch, 1);
-		}
-		else
+		if (!G_ClientInstance->sendBreak())
 		{
 			exit(-1);
 		}
@@ -312,6 +307,21 @@ void AClient::sendServerHalt()
 	sendMessage(msgData);
 }
 
+bool AClient::sendBreak()
+{
+	if (_fifoOutputFD != -1)
+	{
+		char ch = 0x03;
+		write(G_ClientInstance->_fifoOutputFD, &ch, 1);
+		_escapeAllowed = true;
+		return true;
+	}
+	else
+	{
+		return false;
+	}
+}
+
 void* AClient::StaticInputLoop(void *p_client)
 {
 	((AClient*)p_client)->inputLoop();
@@ -366,6 +376,7 @@ void AClient::outputLoop()
 		char ch;
 		bool escaping = false;
 		bool stop = false;
+		_escapeAllowed = true;
 		while (!stop)
 		{
 			ch = getchar();
@@ -382,7 +393,7 @@ void AClient::outputLoop()
 						break;
 				}
 			}
-			else if (ch == '~')
+			else if (_escapeAllowed && (ch == '~'))
 			{
 				escaping = true;
 			}
@@ -390,6 +401,8 @@ void AClient::outputLoop()
 			{
 				write(_fifoOutputFD, &ch, 1);
 			}
+			/* le caractere d'echappement n'est valide qu'apres un \n, ctrl-d ou ctrl-c */
+			_escapeAllowed = ((ch == '\n') || (ch == 0x04));
 		}
 		if (_fifoOutputFD != -1)
 		{
