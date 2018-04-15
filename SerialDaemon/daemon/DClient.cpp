@@ -3,6 +3,9 @@
 #include <unistd.h>
 #include <cstring>
 #include <sstream>
+#include <csignal>
+#include <cerrno>
+
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -10,8 +13,6 @@
 #include "DServer.h"
 #include "definition.h"
 #include "ClientServerComm.h"
-
-static const std::string G_IncompatibleClient[] = {  };
 
 DClient::DClient(int p_clientFD, DServer* p_server)
 	: _validity(false), _clientSocketFD(p_clientFD), _threadId(), _server(p_server),
@@ -23,7 +24,7 @@ DClient::DClient(int p_clientFD, DServer* p_server)
 	}
 	else
 	{
-		_server->logFile() << "Internal error: fail to create client thread" << std::endl;
+		_server->logFile() << "Internal error: unable to create client thread" << std::endl;
 	}
 }
 
@@ -45,6 +46,12 @@ DClient::~DClient()
 
 void* DClient::StaticEventLoop(void *p_client)
 {
+	/* Les signaux handler sont executes dans le thread principal */
+	sigset_t signalSet;
+	sigemptyset(&signalSet);
+	sigaddset(&signalSet, SIGTERM);
+	pthread_sigmask(SIG_BLOCK, &signalSet, NULL);
+
 	((DClient*)p_client)->eventLoop();
 	((DClient*)p_client)->_validity = false;
 	/* Le serveur va detruire l'objet p_client lors de cet appel */
@@ -89,8 +96,7 @@ void DClient::eventLoop()
 
 	/* Test si la version de client fait partie de la liste des versions incompatibles */
 	bool incompatible = false;
-	size_t nbIncompatible = sizeof(G_IncompatibleClient) / sizeof(std::string);
-	for (int i = 0; (i < sizeof(G_IncompatibleClient) / sizeof(std::string)) && !incompatible; i++)
+	for (int i = 0; (i < NB_INCOMPATIBLE_CLIENT) && !incompatible; i++)
 	{
 		if (senderVersion.compare(G_IncompatibleClient[i]) == 0)
 		{
@@ -99,7 +105,7 @@ void DClient::eventLoop()
 	}
 	if (incompatible)
 	{
-		std::string message("Unable to connect. Incompatible daemon already started");
+		std::string message("Unable to connect client. Incompatible daemon already started");
 		sendFatal(message);
 	}
 	else
@@ -130,7 +136,6 @@ bool DClient::receiveMessage(std::map<std::string, std::string> *p_dataExpected)
 	memset(msgBuffer, 0, CLI_SER_BUFFER_SIZE);
 	msgLength = recv(_clientSocketFD, msgBuffer, CLI_SER_BUFFER_SIZE, 0);
 	msgBuffer[CLI_SER_BUFFER_SIZE-1] = '\0';
-
 	if (msgLength <= 0)
 	{
 		/* connection interrompue */
@@ -143,13 +148,6 @@ bool DClient::receiveMessage(std::map<std::string, std::string> *p_dataExpected)
 	{
 		std::cerr << "Invalid Message received from client: " << msgBuffer << std::endl;
 		return false;
-	}
-
-	if (msgData.find(KEY_HALTSER) != msgData.end())
-	{
-		/* Message d'arret du serveur */
-		_server->halt(msgData[KEY_HALTSER]);
-		return true;
 	}
 
 	if (p_dataExpected != NULL)
@@ -206,9 +204,26 @@ bool DClient::sendFatal(std::string &p_msg)
 	return sendMessage(p_data);
 }
 
-bool DClient::setFifos(std::string &p_fifoInputPath, std::string &p_fifoOutputPath)
+bool DClient::activateClient(std::string &p_outputPath)
 {
-	_fifoInputPath = p_fifoInputPath;
+	/* Creation de la fifo de communication Server => Client */
+	int fifoId = 0;
+	bool fifoCreated = false;
+	do {
+		std::stringstream fifoName;
+		fifoName << WORKING_DIRECTORY << "/" << "inputfifo" << fifoId;
+		_fifoInputPath = fifoName.str();
+
+		fifoCreated = (mkfifo(_fifoInputPath.c_str(), 0666) == 0);
+
+		if (!fifoCreated && ((errno != EEXIST) || (fifoId > 512)))
+		{
+			std::string messageStr("Internal error: Unable to create fifo");
+			sendFatal(messageStr);
+			return false;
+		}
+		fifoId++;
+	} while (!fifoCreated);
 
 	if (0 != pthread_create(&_openInputThreadId, NULL, DClient::StaticOpenInputFifo, this))
 	{
@@ -218,7 +233,7 @@ bool DClient::setFifos(std::string &p_fifoInputPath, std::string &p_fifoOutputPa
 	std::map<std::string, std::string> msgData;
 	/* Le serveur envoie au client les ressources pour communiquer avec la connexion */
 	msgData[KEY_INPATH] = _fifoInputPath;
-	msgData[KEY_OUTPATH] = p_fifoOutputPath;
+	msgData[KEY_OUTPATH] = p_outputPath;
 	return sendMessage(msgData);
 }
 
@@ -244,6 +259,7 @@ void DClient::writeToInputFifo(const char* p_data, size_t p_size)
 	{
 		if (write(_fifoInputFD, p_data, p_size) < 0)
 		{
+			close(_fifoInputFD);
 			_fifoInputFD = -1;
 		}
 	}

@@ -49,7 +49,6 @@ private:
 	std::string         _line;
 	int                 _speed;
 	bool                _isMonitoring;
-	bool                _monitoringLoopback;
 
 	int                 _serialFD;
 

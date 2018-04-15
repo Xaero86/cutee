@@ -22,7 +22,7 @@ public :
 
 	void writeToInputFifo(const char* p_data, size_t p_size);
 
-	bool setFifos(std::string &p_fifoInputPath, std::string &p_fifoOutputPath);
+	bool activateClient(std::string &p_outputPath);
 
 	bool sendInfo(std::string &p_msg);
 	bool sendError(std::string &p_msg);

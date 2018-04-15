@@ -3,7 +3,6 @@
 #include <unistd.h>
 #include <cstring>
 #include <cstdlib>
-#include <csignal>
 #include <cstdio>
 #include <iostream>
 
@@ -16,10 +15,6 @@
 
 #include "ClientServerComm.h"
 
-/* Liste des versions de serveur incompatible, a completer en cas de rupture d'interface client/serveur */
-static const std::string G_IncompatibleServer[] = {  };
-
-AClient *AClient::G_ClientInstance = NULL;
 struct termios AClient::G_NormalTerm;
 
 void AClient::CreateAndConnecteClient(uint16_t p_port, std::string p_line, std::string p_speed, bool p_monitoring, bool p_onePerUser)
@@ -29,45 +24,21 @@ void AClient::CreateAndConnecteClient(uint16_t p_port, std::string p_line, std::
 	{
 		struct termios newTerm;
 
-		/* Gestion des signaux */
-		G_ClientInstance = &client;
-		signal(SIGUSR1, SignalHandler);
-		signal(SIGINT,  SignalHandler);
-		signal(SIGPIPE, SIG_IGN);
-
 		/* Gestion du terminal: stdin */
-		/* Empeche echo des caracteres entres */
+		/* Empeche echo des caracteres entres, pas besoin d'appuyer sur entrer */
 		tcgetattr(STDIN_FILENO, &G_NormalTerm);
 		newTerm = G_NormalTerm;
-		newTerm.c_lflag &= ~(ICANON | ECHO);
+		newTerm.c_lflag &= ~(ICANON | IEXTEN | ISIG | ECHO | ECHOE | ECHOK | ECHONL);
+//		newTerm.c_iflag &= ~(INLCR | IGNCR | ICRNL | IXON | IXOFF | IXANY);
+//		newTerm.c_oflag &= ~(OPOST);
 		tcsetattr(STDIN_FILENO, TCSANOW, &newTerm);
 		atexit(reinitTerm);
 
 		client.eventLoop();
-		G_ClientInstance = NULL;
 	}
 	else
 	{
 		std::cerr << "Internal error: cannot connect to server" << std::endl;
-	}
-}
-
-void AClient::SignalHandler(int p_signo)
-{
-	if (G_ClientInstance == NULL)
-	{
-		exit(-1);
-	}
-	if (p_signo == SIGUSR1)
-	{
-		G_ClientInstance->sendServerHalt();
-	}
-	if (p_signo == SIGINT)
-	{
-		if (!G_ClientInstance->sendBreak())
-		{
-			exit(-1);
-		}
 	}
 }
 
@@ -104,30 +75,28 @@ AClient::~AClient()
 
 bool AClient::connectToServer()
 {
-	int readyCheck = -1;
+	_clientSocketFD = socket(AF_INET, SOCK_STREAM, 0);
 	if (_clientSocketFD == -1)
 	{
-		_clientSocketFD = socket(AF_INET, SOCK_STREAM, 0);
-		if (_clientSocketFD < 0)
-		{
-			std::cerr << "Unable to create socket on port " << _port << std::endl;
-		}
-		else
-		{
-			int nbTryLeft = 5;
-			struct sockaddr_in socketProp;
-                        socketProp.sin_family = AF_INET;
-                        socketProp.sin_port = htons(_port);
-                        socketProp.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-			while (((readyCheck = connect(_clientSocketFD, (struct sockaddr *)&socketProp, sizeof(sockaddr_in))) < 0) &&
-				(nbTryLeft > 0))
-			{
-				nbTryLeft--;
-				usleep(200000);
-			}
-		}
+		std::cerr << "Unable to create socket on port " << _port << std::endl;
+		return false;
 	}
-	return (_clientSocketFD != -1 && readyCheck == 0);
+
+	int readyCheck = -1;
+	int nbTryLeft = 5;
+	struct sockaddr_in socketProp;
+	socketProp.sin_family = AF_INET;
+	socketProp.sin_port = htons(_port);
+	socketProp.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+
+	while (((readyCheck = connect(_clientSocketFD, (struct sockaddr *)&socketProp, sizeof(sockaddr_in))) == -1) &&
+	       (nbTryLeft > 0))
+	{
+		nbTryLeft--;
+		usleep(200000);
+	}
+
+	return (readyCheck == 0);
 }
 
 void AClient::eventLoop()
@@ -144,8 +113,7 @@ void AClient::eventLoop()
 
 	/* Test si la version de serveur fait partie de la liste des versions incompatibles */
 	bool incompatible = false;
-	size_t nbIncompatible = sizeof(G_IncompatibleServer) / sizeof(std::string);
-	for (int i = 0; (i < sizeof(G_IncompatibleServer) / sizeof(std::string)) && !incompatible; i++)
+	for (int i = 0; (i < NB_INCOMPATIBLE_SERVER) && !incompatible; i++)
 	{
 		if (senderVersion.compare(G_IncompatibleServer[i]) == 0)
 		{
@@ -154,7 +122,7 @@ void AClient::eventLoop()
 	}
 	if (incompatible)
 	{
-		std::cerr << "Unable to connect. Incompatible daemon already started" << std::endl;
+		std::cerr << "Unable to connect to server. Incompatible daemon already started" << std::endl;
 		return;
 	}
 
@@ -298,30 +266,6 @@ std::string AClient::getUser()
 	}
 }
 
-/* Envoi d'un message d'arret au serveur, avec le nom du user en parametre si possible */
-void AClient::sendServerHalt()
-{
-	std::map<std::string, std::string> msgData;
-
-	msgData[KEY_HALTSER] = getUser();
-	sendMessage(msgData);
-}
-
-bool AClient::sendBreak()
-{
-	if (_fifoOutputFD != -1)
-	{
-		char ch = 0x03;
-		write(G_ClientInstance->_fifoOutputFD, &ch, 1);
-		_escapeAllowed = true;
-		return true;
-	}
-	else
-	{
-		return false;
-	}
-}
-
 void* AClient::StaticInputLoop(void *p_client)
 {
 	((AClient*)p_client)->inputLoop();
@@ -342,13 +286,12 @@ void AClient::inputLoop()
 			nbRead = read(_fifoInputFD, inputBuffer, FIFO_BUFFER-1);
 			if (nbRead > 0)
 			{
-				std::cout.write(inputBuffer, nbRead);
+				write(STDOUT_FILENO, inputBuffer, nbRead);
 			}
 			else
 			{
 				break;
 			}
-			std::cout.flush();
 		}
 		if (_fifoInputFD != -1)
 		{
@@ -375,8 +318,8 @@ void AClient::outputLoop()
 	{
 		char ch;
 		bool escaping = false;
+		bool escapeAllowed = true;
 		bool stop = false;
-		_escapeAllowed = true;
 		while (!stop)
 		{
 			ch = getchar();
@@ -393,7 +336,7 @@ void AClient::outputLoop()
 						break;
 				}
 			}
-			else if (_escapeAllowed && (ch == '~'))
+			else if (escapeAllowed && (ch == '~'))
 			{
 				escaping = true;
 			}
@@ -401,8 +344,8 @@ void AClient::outputLoop()
 			{
 				write(_fifoOutputFD, &ch, 1);
 			}
-			/* le caractere d'echappement n'est valide qu'apres un \n, ctrl-d ou ctrl-c */
-			_escapeAllowed = ((ch == '\n') || (ch == 0x04));
+			/* le caractere d'echappement n'est valide qu'apres un \n, ctrl-c ou ctrl-d */
+			escapeAllowed = ((ch == '\n') || (ch == 0x03) || (ch == 0x04));
 		}
 		if (_fifoOutputFD != -1)
 		{

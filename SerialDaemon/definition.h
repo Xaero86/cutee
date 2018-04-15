@@ -21,12 +21,18 @@
 #define KEY_INFO    "info"
 #define KEY_ERROR   "error"
 #define KEY_FATAL   "fatal"
-#define KEY_HALTSER "serverHalt"
 
 /* General */
 #define WORKING_DIRECTORY "/tmp/serialDaemon/"
 #define SERVER_LOG_FILE   "serialDaemon.log"
 
 #define FIFO_BUFFER 2048
+
+/* Liste des versions de serveur incompatible avec ce client */
+#define NB_INCOMPATIBLE_SERVER 0
+extern const char *G_IncompatibleServer[NB_INCOMPATIBLE_SERVER];
+/* Liste des versions de client incompatible avec ce serveur */
+#define NB_INCOMPATIBLE_CLIENT 0
+extern const char *G_IncompatibleClient[NB_INCOMPATIBLE_CLIENT];
 
 #endif // DEFINITION_H

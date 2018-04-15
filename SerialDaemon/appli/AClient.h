@@ -12,9 +12,7 @@ class AClient
 {
 public:
 	static void CreateAndConnecteClient(uint16_t p_port, std::string p_line, std::string p_speed, bool p_monitoring, bool p_onePerUser);
-	static void SignalHandler(int p_signo);
 	static void reinitTerm();
-	static AClient *G_ClientInstance;
 	static struct termios G_NormalTerm;
 
 	virtual ~AClient();
@@ -28,11 +26,8 @@ private:
 	bool receiveMessage(std::map<std::string, std::string> *p_dataExpected = NULL);
 	bool sendMessage(std::map<std::string, std::string> &p_data);
 
-	std::string getUser();
-	void sendServerHalt();
-	bool sendBreak();
+	static inline std::string getUser();
 
-	bool startInputLoop(std::string &p_fifoPath);
 	static void* StaticInputLoop(void *p_client);
 	void inputLoop();
 
@@ -54,7 +49,6 @@ private:
 	std::string         _fifoOutputPath;
 	int                 _fifoOutputFD;
 	pthread_t           _outputThreadId;
-	bool                _escapeAllowed;
 };
 
 #endif // A_CLIENT_H

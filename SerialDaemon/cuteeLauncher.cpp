@@ -11,6 +11,12 @@
 #include "DServer.h"
 #include "AClient.h"
 
+/* A completer en cas de rupture d'interface client/serveur */
+/* Liste des versions de serveur incompatible avec ce client */
+const char *G_IncompatibleServer[NB_INCOMPATIBLE_SERVER] = {  };
+/* Liste des versions de client incompatible avec ce serveur */
+const char *G_IncompatibleClient[NB_INCOMPATIBLE_CLIENT] = {  };
+
 static void usage();
 static void version();
 
@@ -41,11 +47,11 @@ int main(int argc, char** argv)
 				break;
 			case 'v':
 				version();
-				return EXIT_SUCCESS;
+				exit(EXIT_SUCCESS);
 				break;
 			case '?':
 				usage();
-				return EXIT_SUCCESS;
+				exit(EXIT_SUCCESS);
 				break;
 		}
 	}
@@ -81,6 +87,8 @@ int main(int argc, char** argv)
 
 	/* Pour ne pas garder un processus zombie lors de la fin du processus intermediaire */
 	signal(SIGCHLD, SIG_IGN);
+	/* les erreurs de lecture/ecriture sont gerees localement */
+	signal(SIGPIPE, SIG_IGN);
 
 	pid = fork();
 	

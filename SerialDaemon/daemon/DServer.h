@@ -23,7 +23,7 @@ public :
 	void handleDisconnect();
 	void handleConnexionClosed();
 	void connectClient(DClient *p_client);
-	bool halt(std::string p_cause = "");
+	void halt();
 
 	std::ofstream &logFile() {return _logFile;}
 	std::string getStatus();

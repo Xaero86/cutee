@@ -14,7 +14,6 @@
 #include <sys/prctl.h>
 #include <netinet/in.h>
 
-
 #include "definition.h"
 #include "DClient.h"
 #include "DConnexion.h"
@@ -30,7 +29,7 @@ void DServer::CreateAndStartDaemonServer(uint16_t p_port, int argc, char** argv)
 	}
 
 	signal(SIGCHLD, SIG_IGN);
-	signal(SIGHUP, SIG_IGN);
+	signal(SIGHUP,  SIG_IGN);
 
 	/* Deuxieme fork pour creer un daemon */
 	pid_t pid = fork();
@@ -73,11 +72,14 @@ void DServer::CreateAndStartDaemonServer(uint16_t p_port, int argc, char** argv)
 	DServer daemonServer(p_port);
 	if (daemonServer.startServer())
 	{
+		struct sigaction newAction;
+
 		G_ServerInstance = &daemonServer;
 		/* Nettoyage des ressources sur kill */
-		signal(SIGINT,  SignalHandler);
-		/* SIGPIPE traite sur read et write, pas sur signal */
-		signal(SIGPIPE, SIG_IGN);
+		newAction.sa_handler = SignalHandler;
+		newAction.sa_flags = SA_RESTART;
+		sigemptyset(&newAction.sa_mask);
+		sigaction(SIGTERM, &newAction, NULL);
 
 		daemonServer.openLog();
 		daemonServer.eventLoop();
@@ -91,7 +93,7 @@ void DServer::SignalHandler(int p_signo)
 	{
 		exit(-1);
 	}
-	if (p_signo == SIGINT)
+	if (p_signo == SIGTERM)
 	{
 		/* En cas de kill sur le serveur, on essaye de l'arreter proprement: nettoyage des ressources */
 		/* Si ca bloque faire un kill -9 */
@@ -309,21 +311,10 @@ void DServer::handleConnexionClosed()
 	pthread_mutex_unlock(&_connexionMutex);
 }
 
-bool DServer::halt(std::string p_cause)
+void DServer::halt()
 {
 	/* Fermeture forcee du serveur: on demande a chaque client de se deconnecter */
-	std::string message = "";
-
-	if (p_cause.empty())
-	{
-		message = "Rupture. Server shut down.";
-	}
-	else
-	{
-		std::stringstream streamMessage;
-		streamMessage << "Rupture. Server shut down by " << p_cause;
-		message = streamMessage.str();
-	}
+	std::string message = "Rupture. Server shut down.";
 
 	pthread_mutex_lock(&_clientMutex);
 	std::list<DClient*>::iterator it = _clients.begin();
@@ -336,6 +327,12 @@ bool DServer::halt(std::string p_cause)
 		it++;
 	}
 	pthread_mutex_unlock(&_clientMutex);
+
+	/* Normalement le fait de demander a tous les clients de se deconnecter doit suffir */
+	/* Au cas ou ca ne suffit pas, on ferme la socket du server: le server sort de ca boucle principale,
+	 * ce qui aura pour effet de liberer les ressources (et donc de supprimer les fifo) */
+	_logFile << "Server shut down. Stopping daemon" << std::endl;
+	shutdown(_serverSocketFD, SHUT_RDWR);
 }
 
 std::string DServer::getStatus()

@@ -16,7 +16,7 @@
 
 DConnexion::DConnexion(DServer* p_server, std::string &p_line, std::string &p_speed)
 	: _server(p_server), _line(p_line), _isMonitoring(false),
-	  _valid(false), _alive(false), _monitoringLoopback(false),
+	  _valid(false), _alive(false),
 	  _serialFD(-1), _commThreadId(),
 	  _monitoringFifoName(), _monitoringFifoFD(-1)
 {
@@ -44,7 +44,7 @@ DConnexion::DConnexion(DServer* p_server, std::string &p_line, std::string &p_sp
 
 DConnexion::DConnexion(DServer* p_server)
 	: _server(p_server), _speed(0), _isMonitoring(true),
-	  _valid(false), _alive(false), _monitoringLoopback(false),
+	  _valid(false), _alive(false),
 	  _serialFD(-1), _commThreadId(),
 	  _monitoringFifoName(), _monitoringFifoFD(-1)
 {
@@ -53,7 +53,6 @@ DConnexion::DConnexion(DServer* p_server)
 	_internalPipeFDs[1] = -1;
 
 	_line = "serial daemon monitoring";
-
 
 	/* Creation de la fifo de monitoring */
 	int fifoId = 0;
@@ -222,6 +221,9 @@ void DConnexion::monitoringLoop()
 	int nbRead;
 	memset(monitoringBuffer, 0, FIFO_BUFFER);
 
+	bool loopback = false;
+	bool initiateShutdown = false;
+
 	std::list<DClient*>::iterator itClient;
 
 	while (_valid)
@@ -229,36 +231,58 @@ void DConnexion::monitoringLoop()
 		nbRead = read(_monitoringFifoFD, monitoringBuffer, FIFO_BUFFER-1);
 		if (nbRead > 0)
 		{
-			std::string response;
-			if (_monitoringLoopback)
+			int reponseSize = 0;
+			if (loopback)
 			{
 				if ((nbRead == 1) && (monitoringBuffer[0] == 0x03))
 				{
 					/* Ctrl+c => break => 0x03 */
-					_monitoringLoopback = false;
-					response = "Loopback stopped.\n";
+					loopback = false;
+					strcpy(monitoringBuffer, "Loopback stopped.\n");
+					reponseSize = strlen(monitoringBuffer);
 				}
 				else
 				{
-					response = std::string(monitoringBuffer, nbRead);
+					reponseSize = nbRead;
 				}
+				initiateShutdown = false;
 			}
 			else if ((nbRead == 1) && (monitoringBuffer[0] == 's'))
 			{
-				response = _server->getStatus();
+				std::string reponse = _server->getStatus();
+				strncpy(monitoringBuffer, reponse.c_str(), FIFO_BUFFER-1);
+				monitoringBuffer[FIFO_BUFFER-1] = '\0';
+				reponseSize = strlen(monitoringBuffer);
+				initiateShutdown = false;
 			}
 			else if ((nbRead == 1) && (monitoringBuffer[0] == 'l'))
 			{
-				_monitoringLoopback = true;
-				response = "Loopback activated. Ctrl+C to stop\n";
+				loopback = true;
+				strcpy(monitoringBuffer, "Loopback activated. Ctrl+C to stop\n");
+				reponseSize = strlen(monitoringBuffer);
+				initiateShutdown = false;
 			}
-			if (response.length() > 0)
+			else if ((nbRead == 1) && (monitoringBuffer[0] == 'q'))
+			{
+				initiateShutdown = true;
+				strcpy(monitoringBuffer, "Shut down server ? Press y to confirm\n");
+				reponseSize = strlen(monitoringBuffer);
+			}
+			else if ((nbRead == 1) && (monitoringBuffer[0] == 'y') && initiateShutdown)
+			{
+				_server->halt();
+			}
+			else
+			{
+				initiateShutdown = false;
+			}
+			if (reponseSize > 0)
 			{
 				pthread_mutex_lock(&_clientMutex);
 				itClient = _clientsList.begin();
 				while(itClient != _clientsList.end())
 				{
-					(*itClient)->writeToInputFifo(response.c_str(), response.length());
+					(*itClient)->writeToInputFifo(monitoringBuffer, reponseSize);
 					itClient++;
 				}
 				pthread_mutex_unlock(&_clientMutex);
@@ -359,34 +383,21 @@ int DConnexion::tryAddClient(DClient *p_client)
 
 void DConnexion::addClient(DClient *p_client)
 {
-	std::string fifoNameStr;
-	int fifoId = 0;
-	bool fifoCreated = false;
-	do {
-		std::stringstream fifoName;
-		fifoName << WORKING_DIRECTORY << "/" << "inputfifo" << fifoId;
-		fifoNameStr = fifoName.str();
-
-		fifoCreated = (mkfifo(fifoNameStr.c_str(), 0666) == 0);
-
-		if (!fifoCreated && ((errno != EEXIST) || (fifoId > 512)))
-		{
-			std::string messageStr("Internal error: Unable to create fifo");
-			p_client->sendFatal(messageStr);
-			return;
-		}
-		fifoId++;
-	} while (!fifoCreated);
-
 	if (!_isMonitoring)
 	{
-		/* le client va lire sur fifoNameStr et ecrire directement sur la liaison _line */
-		p_client->setFifos(fifoNameStr, _line);
+		/* le client va ecrire directement sur la liaison _line */
+		if (!p_client->activateClient(_line))
+		{
+			return;
+		}
 	}
 	else
 	{
-		/* le client va lire sur fifoNameStr et ecrire sur la fifo de monitoring */
-		p_client->setFifos(fifoNameStr, _monitoringFifoName);
+		/* le client va ecrire sur la fifo de monitoring */
+		if (!p_client->activateClient(_monitoringFifoName))
+		{
+			return;
+		}
 	}
 
 	pthread_mutex_lock(&_clientMutex);
@@ -398,6 +409,7 @@ void DConnexion::addClient(DClient *p_client)
 	if (_isMonitoring)
 	{
 		message << "\nPress s to display statistics.";
+		message << "\nPress q to shutdown server.";
 		message << "\nPress l to active loopback.";
 	}
 	std::string messageStr = message.str();
@@ -407,7 +419,8 @@ void DConnexion::addClient(DClient *p_client)
 bool DConnexion::openConnexion()
 {
 	/* ouverture en non bloquant, pour l'utilisation de select */
-	_serialFD = open(_line.c_str(), O_RDWR | O_NOCTTY | O_NDELAY);
+	/* ouverture en lecture seulement, l'ecriture est faite cote client */
+	_serialFD = open(_line.c_str(), O_RDONLY | O_NOCTTY | O_NDELAY);
 	if (_serialFD < 0)
 	{
 		return false;
